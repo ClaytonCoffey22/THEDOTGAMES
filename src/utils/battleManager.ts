@@ -146,7 +146,7 @@ export const getTodaysParticipants = async (): Promise<TodaysParticipant[]> => {
     const { data, error } = await supabase
       .from("todays_leaderboard")
       .select("*")
-      .order("placement", { ascending: true, nullsLast: true });
+      .order("placement", { ascending: true, nullsFirst: false });
 
     if (error) {
       console.error("Error fetching today's participants:", error);

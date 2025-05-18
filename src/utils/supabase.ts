@@ -45,8 +45,8 @@ export interface DeviceSubmission {
 // Type for leaderboard entries - this makes our code more predictable
 interface LeaderboardEntry {
   name: string;
-  total_wins: number;
-  total_eliminations: number;
+  wins: number; // Changed from total_wins
+  eliminations: number; // Changed from total_eliminations
 }
 
 /**
