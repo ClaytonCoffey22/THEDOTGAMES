@@ -71,17 +71,14 @@ const HomePage: React.FC = () => {
             THE DOT GAMES
           </h1>
           <p className="text-xl text-gray-300 max-w-3xl mx-auto">
-            A nightly battle royale where only one dot survives. Who will be
-            tonight's champion?
+            A nightly battle royale where only one dot survives. Who will be tonight's champion?
           </p>
 
           {/* Countdown */}
           <div className="mt-8 max-w-sm mx-auto bg-gray-800 rounded-lg p-4 border border-gray-700">
-            <h2 className="text-lg font-semibold text-white mb-1">
-              Next Battle
-            </h2>
+            <h2 className="text-lg font-semibold text-white mb-1">Next Battle</h2>
             <div className="font-mono text-2xl font-bold text-pink-500 mb-2">
-              {todaysParticipants.length < 2 ? (
+              {todaysParticipants.length < 1 ? (
                 <>
                   Not enough dots!{" "}
                   <Link to="/join" className="text-cyan-400 hover:underline">
@@ -91,17 +88,11 @@ const HomePage: React.FC = () => {
                 </>
               ) : isSimulationRunning ? (
                 <>
-                  <span className="text-pink-500 font-semibold">
-                    {simulationState.dots.length} dots
-                  </span>{" "}
-                  remaining in the arena
+                  <span className="text-pink-500 font-semibold">{simulationState.dots.length} dots</span> remaining in the arena
                 </>
               ) : (
                 <>
-                  <span className="text-cyan-500 font-semibold">
-                    {todaysParticipants.length} dots
-                  </span>{" "}
-                  waiting for battle
+                  <span className="text-cyan-500 font-semibold">{todaysParticipants.length} dots</span> waiting for battle
                 </>
               )}
             </div>
@@ -128,11 +119,7 @@ const HomePage: React.FC = () => {
                   )}
 
                   {!simulationState.inProgress && simulationState.winner && (
-                    <Button
-                      onClick={handleShareResult}
-                      variant="secondary"
-                      icon={<Share2 className="h-4 w-4" />}
-                    >
+                    <Button onClick={handleShareResult} variant="secondary" icon={<Share2 className="h-4 w-4" />}>
                       Share Result
                     </Button>
                   )}
@@ -146,27 +133,18 @@ const HomePage: React.FC = () => {
                   {todaysParticipants.length < 2 ? (
                     <>
                       Not enough dots!{" "}
-                      <Link
-                        to="/join"
-                        className="text-cyan-400 hover:underline"
-                      >
+                      <Link to="/join" className="text-cyan-400 hover:underline">
                         Join the battle
                       </Link>{" "}
                       to add your dot.
                     </>
                   ) : isSimulationRunning ? (
                     <>
-                      <span className="text-pink-500 font-semibold">
-                        {simulationState.dots.length} dots
-                      </span>{" "}
-                      remaining in the arena
+                      <span className="text-pink-500 font-semibold">{simulationState.dots.length} dots</span> remaining in the arena
                     </>
                   ) : (
                     <>
-                      <span className="text-cyan-500 font-semibold">
-                        {todaysParticipants.length} dots
-                      </span>{" "}
-                      waiting for battle
+                      <span className="text-cyan-500 font-semibold">{todaysParticipants.length} dots</span> waiting for battle
                     </>
                   )}
                 </p>
@@ -180,12 +158,9 @@ const HomePage: React.FC = () => {
             <PowersLegend />
 
             <div className="bg-gray-800 bg-opacity-50 rounded-lg p-4 border border-gray-700">
-              <h3 className="text-lg font-semibold text-white mb-3">
-                Join The Battle
-              </h3>
+              <h3 className="text-lg font-semibold text-white mb-3">Join The Battle</h3>
               <p className="text-gray-300 text-sm mb-4">
-                Want your dot to compete in the next battle? Enter the arena and
-                see if you can be the last dot standing!
+                Want your dot to compete in the next battle? Enter the arena and see if you can be the last dot standing!
               </p>
               <Link to="/join">
                 <Button variant="primary" fullWidth>
