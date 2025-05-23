@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useGame } from "../context/GameContext";
 import { Trophy, Users, Zap, Share2 } from "lucide-react";
 import Button from "../components/ui/Button";
+import { Link } from "react-router-dom";
 
 const LeaderboardPage: React.FC = () => {
   const { allTimeLeaderboard, todaysLeaderboard } = useGame();
@@ -254,12 +255,9 @@ const LeaderboardPage: React.FC = () => {
               Don't see your name on the leaderboard? Join the next battle and
               compete for glory!
             </p>
-            <Button
-              variant="primary"
-              onClick={() => (window.location.href = "/join")}
-            >
-              Register Your Dot
-            </Button>
+            <Link to="/join">
+              <Button variant="primary">Register Your Dot</Button>
+            </Link>
           </div>
         </div>
       </div>
