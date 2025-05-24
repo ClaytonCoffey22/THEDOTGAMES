@@ -42,7 +42,6 @@ export async function initializeTodaysBattle() {
   }
 }
 
-// Update the registerForTodaysBattle function signature
 export const registerForTodaysBattle = async (
   dotName: string,
   deviceId: string,
@@ -108,5 +107,87 @@ export const registerForTodaysBattle = async (
   } catch (error) {
     console.error("Failed to register for battle:", error);
     return { success: false, message: "An unexpected error occurred" };
+  }
+};
+
+export const getTodaysParticipants = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('todays_participants')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching participants:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('Failed to fetch participants:', error);
+    return [];
+  }
+};
+
+export const completeTodaysBattle = async (
+  winnerName: string,
+  simulationData: any,
+  durationSeconds: number
+) => {
+  try {
+    const { data, error } = await supabase.rpc('complete_battle', {
+      p_winner_name: winnerName,
+      p_simulation_data: simulationData,
+      p_duration_seconds: durationSeconds
+    });
+
+    if (error) {
+      console.error('Error completing battle:', error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Failed to complete battle:', error);
+    return false;
+  }
+};
+
+export const updateBattleStatus = async (status: 'open' | 'in_progress' | 'completed') => {
+  try {
+    const { error } = await supabase
+      .from('daily_battles')
+      .update({ status })
+      .eq('battle_date', new Date().toISOString().split('T')[0]);
+
+    if (error) {
+      console.error('Error updating battle status:', error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Failed to update battle status:', error);
+    return false;
+  }
+};
+
+export const getRegisteredLeaderboard = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('registered_leaderboard')
+      .select('*')
+      .order('wins', { ascending: false })
+      .limit(100);
+
+    if (error) {
+      console.error('Error fetching leaderboard:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('Failed to fetch leaderboard:', error);
+    return [];
   }
 };
