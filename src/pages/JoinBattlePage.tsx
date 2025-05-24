@@ -4,6 +4,7 @@ import Input from "../components/ui/Input";
 import Button from "../components/ui/Button";
 import { useGame } from "../context/GameContext";
 import { CheckCircle, AlertCircle } from "lucide-react";
+import { getDeviceFingerprint } from "../utils/deviceFingerprint";
 
 const JoinBattlePage: React.FC = () => {
   const [name, setName] = useState("");
@@ -13,26 +14,15 @@ const JoinBattlePage: React.FC = () => {
   >("idle");
   const [errorMessage, setErrorMessage] = useState("");
 
-  // FIXED: Updated to use the correct properties from the new GameContext
-  // The new system uses registerDotForBattle instead of createNewDot
-  // and provides nextBattleTime instead of nextSimulationTime
-  const { registerDotForBattle, registrationStatus, nextBattleTime } =
-    useGame();
-
+  const { registerDotForBattle, registrationStatus, nextBattleTime } = useGame();
   const navigate = useNavigate();
-
-  // FIXED: Derive isRegistrationOpen from registrationStatus
-  // The new system uses an enum-like status instead of a boolean
-  // 'open' means registration is available, 'full' means capacity reached, 'closed' means battle in progress
   const isRegistrationOpen = registrationStatus === "open";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Check if registration is open before proceeding
     if (!isRegistrationOpen) {
       setFormStatus("error");
-      // Provide more specific error messages based on why registration is closed
       if (registrationStatus === "full") {
         setErrorMessage("The battle is full. Please try again tomorrow!");
       } else if (registrationStatus === "closed") {
@@ -45,15 +35,12 @@ const JoinBattlePage: React.FC = () => {
       return;
     }
 
-    // Validate that a name was provided
     if (!name.trim()) {
       setFormStatus("error");
       setErrorMessage("Please enter a name for your dot.");
       return;
     }
 
-    // Validate name format (only allow letters, numbers, and underscores)
-    // This prevents issues with database storage and display
     if (!/^[a-zA-Z0-9_]+$/.test(name)) {
       setFormStatus("error");
       setErrorMessage(
@@ -62,32 +49,24 @@ const JoinBattlePage: React.FC = () => {
       return;
     }
 
-    // Add "Dot_" prefix if not already included
-    // This maintains consistency with the game's naming convention
     const dotName = name.startsWith("Dot_") ? name : `Dot_${name}`;
+    const deviceId = getDeviceFingerprint();
 
     setFormStatus("submitting");
 
     try {
-      // FIXED: Use the new registerDotForBattle function which returns an object
-      // The old createNewDot returned just a boolean, the new function returns
-      // an object with success status and detailed message
-      const result = await registerDotForBattle(dotName);
+      const result = await registerDotForBattle(dotName, deviceId);
 
       if (result.success) {
         setFormStatus("success");
-        // Redirect to homepage after 2 seconds so user can see success message
         setTimeout(() => {
           navigate("/");
         }, 2000);
       } else {
         setFormStatus("error");
-        // FIXED: Use the specific error message returned by the registration function
-        // This provides more helpful feedback than a generic error message
         setErrorMessage(result.message);
       }
     } catch (error) {
-      // Handle any unexpected errors (network issues, etc.)
       setFormStatus("error");
       setErrorMessage("An unexpected error occurred. Please try again.");
       console.error("Registration error:", error);
@@ -127,7 +106,6 @@ const JoinBattlePage: React.FC = () => {
                     isRegistrationOpen ? "text-green-400" : "text-red-400"
                   }
                 >
-                  {/* IMPROVED: More detailed status messages based on registration state */}
                   {registrationStatus === "open" &&
                     "Registration is open for the next battle!"}
                   {registrationStatus === "full" &&
@@ -136,7 +114,6 @@ const JoinBattlePage: React.FC = () => {
                     "Registration is currently closed during an active battle."}
                 </span>
               </div>
-              {/* FIXED: Use nextBattleTime instead of nextSimulationTime */}
               {nextBattleTime && (
                 <div className="mt-2 text-sm text-gray-400">
                   Next battle starts: {nextBattleTime.toLocaleDateString()} at{" "}
