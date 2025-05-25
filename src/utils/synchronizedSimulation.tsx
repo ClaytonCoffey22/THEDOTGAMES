@@ -96,7 +96,6 @@ export class SynchronizedBattleEngine {
       this.isSyncing = false;
     }
   }
-  private isSyncing: boolean = false;
 
   private async completeBattle(winner: Dot, finalState: SimulationState) {
     try {
