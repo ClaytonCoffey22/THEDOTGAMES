@@ -8,23 +8,25 @@ const GROWTH_FACTOR = 1.2;
 const MOMENTUM_FACTOR = 0.7;
 const MAX_SPEED = 10;
 const MIN_SPEED = 3;
-const POWER_ACTIVATION_CHANCE = 0.02;
-const POWER_DURATION_BASE = 3000;
-const POWER_COOLDOWN_BASE = 8000;
+const POWER_ACTIVATION_CHANCE = 0.05; // Increased chance for more frequent power-ups
+const POWER_DURATION_BASE = 4000; // 4 seconds base duration
+const POWER_COOLDOWN_BASE = 6000; // 6 seconds cooldown
+const MATCH_TIME_PER_ROUND = 3000; // 3 seconds per round average
 const TELEPORT_CHANCE = 0.08;
 
 // Match duration based on participant count (in milliseconds)
 const getMatchDuration = (participantCount: number): number => {
-  if (participantCount <= 4) return 45000;      // 45 seconds
-  if (participantCount <= 10) return 75000;     // 1:15
-  if (participantCount <= 100) return 105000;   // 1:45
-  return 120000;                                // 2:00
+  // Calculate number of rounds needed for tournament
+  const rounds = Math.ceil(Math.log2(participantCount));
+  // Each round takes MATCH_TIME_PER_ROUND milliseconds
+  return rounds * MATCH_TIME_PER_ROUND;
 };
 
 // Calculate attraction force as time progresses
 const getAttractionForce = (elapsedTime: number, totalDuration: number): number => {
   const timeProgress = elapsedTime / totalDuration;
-  return Math.min(5, 1 + Math.pow(timeProgress, 2) * 8);
+  // Increased attraction force for faster matches
+  return Math.min(8, 1 + Math.pow(timeProgress, 2) * 10);
 };
 
 interface DotVelocity {
@@ -33,6 +35,121 @@ interface DotVelocity {
 }
 
 const dotVelocities = new Map<string, DotVelocity>();
+
+// Tournament bracket management
+interface BracketMatch {
+  dot1: Dot;
+  dot2: Dot;
+  winner?: Dot;
+  completed: boolean;
+}
+
+class TournamentManager {
+  private matches: BracketMatch[] = [];
+  private currentRound: number = 0;
+  private roundStartTime: number = 0;
+
+  constructor(dots: Dot[]) {
+    this.initializeBracket(dots);
+  }
+
+  private initializeBracket(dots: Dot[]) {
+    // Shuffle dots for random matchups
+    const shuffledDots = [...dots].sort(() => Math.random() - 0.5);
+    
+    // Create initial matches
+    for (let i = 0; i < shuffledDots.length; i += 2) {
+      if (i + 1 < shuffledDots.length) {
+        this.matches.push({
+          dot1: shuffledDots[i],
+          dot2: shuffledDots[i + 1],
+          completed: false
+        });
+      } else {
+        // Bye round if odd number of dots
+        this.matches.push({
+          dot1: shuffledDots[i],
+          dot2: null as any,
+          winner: shuffledDots[i],
+          completed: true
+        });
+      }
+    }
+  }
+
+  public updateMatches(state: SimulationState): void {
+    const currentTime = Date.now();
+    
+    // Start new round if needed
+    if (this.roundStartTime === 0) {
+      this.roundStartTime = currentTime;
+    }
+
+    // Check if current round should end
+    if (currentTime - this.roundStartTime >= MATCH_TIME_PER_ROUND) {
+      this.completeRound(state);
+      this.roundStartTime = currentTime;
+    }
+  }
+
+  private completeRound(state: SimulationState): void {
+    const incompleteMatches = this.matches.filter(m => !m.completed);
+    const nextRoundMatches: BracketMatch[] = [];
+
+    // Complete all matches in current round
+    for (const match of incompleteMatches) {
+      if (!match.winner) {
+        // Determine winner based on size and random chance
+        const randomFactor = Math.random() * 0.2; // 20% random influence
+        const dot1Score = match.dot1.size * (1 + randomFactor);
+        const dot2Score = match.dot2.size * (1 + randomFactor);
+        
+        match.winner = dot1Score > dot2Score ? match.dot1 : match.dot2;
+        match.completed = true;
+
+        // Record elimination
+        state.eliminationLog.push({
+          timestamp: Date.now(),
+          eliminatorId: match.winner.id,
+          eliminatorName: match.winner.name,
+          eliminatedId: (match.winner === match.dot1 ? match.dot2 : match.dot1).id,
+          eliminatedName: (match.winner === match.dot1 ? match.dot2 : match.dot1).name
+        });
+
+        match.winner.eliminations++;
+        match.winner.size *= GROWTH_FACTOR;
+      }
+    }
+
+    // Create next round matches
+    for (let i = 0; i < this.matches.length; i += 2) {
+      if (i + 1 < this.matches.length) {
+        nextRoundMatches.push({
+          dot1: this.matches[i].winner!,
+          dot2: this.matches[i + 1].winner!,
+          completed: false
+        });
+      } else if (this.matches[i].winner) {
+        // Single winner advances
+        nextRoundMatches.push({
+          dot1: this.matches[i].winner,
+          dot2: null as any,
+          winner: this.matches[i].winner,
+          completed: true
+        });
+      }
+    }
+
+    this.matches = nextRoundMatches;
+    this.currentRound++;
+
+    // Check if tournament is complete
+    if (this.matches.length === 1 && this.matches[0].completed) {
+      state.winner = this.matches[0].winner!;
+      state.inProgress = false;
+    }
+  }
+}
 
 export const generateSimulation = (
   initialState: SimulationState,
@@ -43,6 +160,7 @@ export const generateSimulation = (
   let animationFrameId: number;
   const startTime = Date.now();
   const matchDuration = getMatchDuration(state.dots.length);
+  const tournament = new TournamentManager(state.dots);
   
   // Initialize velocities and scale parameters
   state.dots.forEach(dot => {
@@ -50,6 +168,17 @@ export const generateSimulation = (
       vx: (Math.random() - 0.5) * MAX_SPEED,
       vy: (Math.random() - 0.5) * MAX_SPEED
     });
+
+    // Randomly assign powers to 30% of dots
+    if (Math.random() < 0.3) {
+      dot.power = {
+        type: ["speed", "shield", "teleport", "grow"][Math.floor(Math.random() * 4)] as "speed" | "shield" | "teleport" | "grow",
+        duration: POWER_DURATION_BASE + Math.random() * 2000,
+        active: false,
+        cooldown: POWER_COOLDOWN_BASE + Math.random() * 4000,
+        lastUsed: 0
+      };
+    }
   });
 
   const update = () => {
@@ -58,31 +187,19 @@ export const generateSimulation = (
     const deltaTime = state.lastUpdateTime ? (currentTime - state.lastUpdateTime) / 1000 : 0.016;
     state.lastUpdateTime = currentTime;
 
+    // Update tournament state
+    tournament.updateMatches(state);
+
     // Force end game if time is up
-    if (elapsedTime >= matchDuration) {
-      const winner = state.dots.reduce((prev, current) => 
-        current.size > prev.size ? current : prev
-      );
-
-      // Force consume all remaining dots
-      const remainingDots = state.dots.filter(dot => dot !== winner);
-      remainingDots.forEach(dot => {
-        state.eliminationLog.push({
-          timestamp: currentTime,
-          eliminatorId: winner.id,
-          eliminatorName: winner.name,
-          eliminatedId: dot.id,
-          eliminatedName: dot.name
-        });
-        winner.eliminations += 1;
-        winner.size += GROWTH_FACTOR;
-      });
-
-      state.dots = [winner];
-      state.winner = winner;
-      state.inProgress = false;
+    if (elapsedTime >= matchDuration || state.dots.length <= 1) {
+      if (!state.winner && state.dots.length > 0) {
+        state.winner = state.dots[0];
+        state.inProgress = false;
+      }
       onUpdate({ ...state });
-      onComplete(winner);
+      if (state.winner) {
+        onComplete(state.winner);
+      }
       return;
     }
 
@@ -90,6 +207,19 @@ export const generateSimulation = (
     
     // Update dot positions and handle interactions
     state.dots.forEach(dot1 => {
+      // Random chance to activate power-ups
+      if (dot1.power && !dot1.power.active && 
+          currentTime - dot1.power.lastUsed >= dot1.power.cooldown &&
+          Math.random() < POWER_ACTIVATION_CHANCE) {
+        dot1.power.active = true;
+        dot1.power.lastUsed = currentTime;
+        setTimeout(() => {
+          if (dot1.power) {
+            dot1.power.active = false;
+          }
+        }, dot1.power.duration);
+      }
+
       const velocity = dotVelocities.get(dot1.id);
       if (!velocity) return;
 
@@ -167,15 +297,6 @@ export const generateSimulation = (
       state.dots = state.dots.filter(dot => 
         !eliminationEvents.some(event => event.eliminatedId === dot.id)
       );
-    }
-
-    // Check for winner
-    if (state.dots.length === 1) {
-      state.winner = state.dots[0];
-      state.inProgress = false;
-      onUpdate({ ...state });
-      onComplete(state.winner);
-      return;
     }
 
     onUpdate({ ...state });
