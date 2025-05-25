@@ -7,6 +7,7 @@ export class SynchronizedBattleEngine {
   private frameNumber: number = 0;
   private updateInterval: NodeJS.Timeout | null = null;
   private isRunning: boolean = false;
+  private isSyncing: boolean = false;
 
   constructor(battleDate: string) {
     this.battleDate = battleDate;
@@ -71,6 +72,10 @@ export class SynchronizedBattleEngine {
   }
 
   private async syncBattleState(state: SimulationState) {
+    // Prevent multiple simultaneous syncs
+    if (this.isSyncing) return;
+    this.isSyncing = true;
+
     try {
       console.log("Syncing battle state...", {
         battleDate: this.battleDate,
@@ -85,14 +90,13 @@ export class SynchronizedBattleEngine {
       });
 
       console.log("Sync result:", { data, error });
-
-      if (error) {
-        console.error("Sync error:", error);
-      }
     } catch (error) {
       console.error("Failed to sync battle state:", error);
+    } finally {
+      this.isSyncing = false;
     }
   }
+  private isSyncing: boolean = false;
 
   private async completeBattle(winner: Dot, finalState: SimulationState) {
     try {
