@@ -13,6 +13,14 @@ const POWER_DURATION_BASE = 3000; // 3 seconds base duration
 const POWER_COOLDOWN_BASE = 8000; // 8 seconds base cooldown
 const TELEPORT_CHANCE = 0.08; // Increased from 0.05 for more frequent teleports
 
+// Duration settings based on participant count
+const getDurationForParticipants = (count: number): number => {
+  if (count <= 4) return 45000; // 45 seconds for 1-4 participants
+  if (count <= 10) return 75000; // 1:15 for 5-10 participants
+  if (count <= 100) return 105000; // 1:45 for 11-100 participants
+  return 120000; // 2:00 for 101-200 participants
+};
+
 interface DotVelocity {
   vx: number;
   vy: number;
@@ -27,6 +35,8 @@ export const generateSimulation = (
 ) => {
   let state = { ...initialState };
   let animationFrameId: number;
+  let simulationStartTime = Date.now();
+  const simulationDuration = getDurationForParticipants(state.dots.length);
   
   // Scale initial dot parameters based on participant count
   const participantCount = state.dots.length;
@@ -56,6 +66,20 @@ export const generateSimulation = (
     const now = Date.now();
     const deltaTime = state.lastUpdateTime ? (now - state.lastUpdateTime) / 1000 : 0.016;
     state.lastUpdateTime = now;
+    
+    // Check if simulation time has expired
+    const elapsedTime = now - simulationStartTime;
+    if (elapsedTime >= simulationDuration) {
+      // Find the largest dot as the winner
+      const winner = state.dots.reduce((prev, current) => 
+        current.size > prev.size ? current : prev
+      );
+      state.winner = winner;
+      state.inProgress = false;
+      onUpdate({ ...state });
+      onComplete(winner);
+      return;
+    }
     
     updateDots(state.dots, deltaTime, scaleFactor);
     
