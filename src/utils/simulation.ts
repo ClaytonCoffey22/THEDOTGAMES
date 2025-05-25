@@ -2,30 +2,29 @@ import { Dot, SimulationState, EliminationEvent } from '../types';
 
 const ARENA_WIDTH = 800;
 const ARENA_HEIGHT = 600;
-const UPDATE_INTERVAL = 16; // 60 FPS for smooth animation
-const ELIMINATION_DISTANCE = 8;
-const GROWTH_FACTOR = 1.0;
-const MOMENTUM_FACTOR = 0.75;
-const MAX_SPEED = 8;
-const MIN_SPEED = 2;
+const UPDATE_INTERVAL = 16;
+const ELIMINATION_DISTANCE = 10;
+const GROWTH_FACTOR = 1.2;
+const MOMENTUM_FACTOR = 0.7;
+const MAX_SPEED = 10;
+const MIN_SPEED = 3;
 const POWER_ACTIVATION_CHANCE = 0.02;
 const POWER_DURATION_BASE = 3000;
 const POWER_COOLDOWN_BASE = 8000;
 const TELEPORT_CHANCE = 0.08;
 
-// Duration settings based on participant count
-const getDurationForParticipants = (count: number): number => {
-  if (count <= 4) return 45000; // 45 seconds for 1-4 participants
-  if (count <= 10) return 75000; // 1:15 for 5-10 participants
-  if (count <= 100) return 105000; // 1:45 for 11-100 participants
-  return 120000; // 2:00 for 101-200 participants
+// Match duration based on participant count (in milliseconds)
+const getMatchDuration = (participantCount: number): number => {
+  if (participantCount <= 4) return 45000;      // 45 seconds
+  if (participantCount <= 10) return 75000;     // 1:15
+  if (participantCount <= 100) return 105000;   // 1:45
+  return 120000;                                // 2:00
 };
 
-// Force larger dots to chase smaller ones as time runs out
-const getForceMultiplier = (elapsedTime: number, totalDuration: number): number => {
-  const timeRemaining = totalDuration - elapsedTime;
-  // Increase force exponentially as time runs out
-  return 1 + Math.pow(1 - (timeRemaining / totalDuration), 2) * 4;
+// Calculate attraction force as time progresses
+const getAttractionForce = (elapsedTime: number, totalDuration: number): number => {
+  const timeProgress = elapsedTime / totalDuration;
+  return Math.min(5, 1 + Math.pow(timeProgress, 2) * 8);
 };
 
 interface DotVelocity {
@@ -42,92 +41,43 @@ export const generateSimulation = (
 ) => {
   let state = { ...initialState };
   let animationFrameId: number;
-  let simulationStartTime = Date.now();
-  const simulationDuration = getDurationForParticipants(state.dots.length);
+  const startTime = Date.now();
+  const matchDuration = getMatchDuration(state.dots.length);
   
-  // Scale initial dot parameters based on participant count
-  const participantCount = state.dots.length;
-  const scaleFactor = Math.max(0.5, Math.min(1.5, 200 / participantCount));
-  
-  // Initialize velocities and scale dot parameters
+  // Initialize velocities and scale parameters
   state.dots.forEach(dot => {
-    if (!dotVelocities.has(dot.id)) {
-      dotVelocities.set(dot.id, { 
-        vx: (Math.random() - 0.5) * MAX_SPEED * scaleFactor,
-        vy: (Math.random() - 0.5) * MAX_SPEED * scaleFactor
-      });
-    }
-    
-    dot.size *= scaleFactor;
-    dot.speed *= scaleFactor;
-    
-    if (dot.power) {
-      dot.power.duration = POWER_DURATION_BASE * scaleFactor;
-      dot.power.cooldown = POWER_COOLDOWN_BASE / scaleFactor;
-    }
-  });
-  
-  const update = () => {
-    const now = Date.now();
-    const deltaTime = state.lastUpdateTime ? (now - state.lastUpdateTime) / 1000 : 0.016;
-    state.lastUpdateTime = now;
-    
-    const elapsedTime = now - simulationStartTime;
-    const forceMultiplier = getForceMultiplier(elapsedTime, simulationDuration);
-    
-    // Update dot movements with increased attraction to smaller dots
-    state.dots.forEach(dot1 => {
-      const velocity = dotVelocities.get(dot1.id);
-      if (!velocity) return;
-      
-      // Find the nearest smaller dot
-      let nearestSmaller: Dot | null = null;
-      let minDistance = Infinity;
-      
-      state.dots.forEach(dot2 => {
-        if (dot1 === dot2 || dot1.size <= dot2.size) return;
-        
-        const dx = dot2.x - dot1.x;
-        const dy = dot2.y - dot1.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        
-        if (distance < minDistance) {
-          minDistance = distance;
-          nearestSmaller = dot2;
-        }
-      });
-      
-      // Apply attraction force towards smaller dot
-      if (nearestSmaller) {
-        const dx = nearestSmaller.x - dot1.x;
-        const dy = nearestSmaller.y - dot1.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        
-        velocity.vx += (dx / distance) * dot1.speed * forceMultiplier * deltaTime;
-        velocity.vy += (dy / distance) * dot1.speed * forceMultiplier * deltaTime;
-      }
+    dotVelocities.set(dot.id, {
+      vx: (Math.random() - 0.5) * MAX_SPEED,
+      vy: (Math.random() - 0.5) * MAX_SPEED
     });
-    
-    // Check if simulation time has expired
-    if (elapsedTime >= simulationDuration) {
-      // Find the largest dot as the winner
+  });
+
+  const update = () => {
+    const currentTime = Date.now();
+    const elapsedTime = currentTime - startTime;
+    const deltaTime = state.lastUpdateTime ? (currentTime - state.lastUpdateTime) / 1000 : 0.016;
+    state.lastUpdateTime = currentTime;
+
+    // Force end game if time is up
+    if (elapsedTime >= matchDuration) {
       const winner = state.dots.reduce((prev, current) => 
         current.size > prev.size ? current : prev
       );
-      
+
       // Force consume all remaining dots
       const remainingDots = state.dots.filter(dot => dot !== winner);
       remainingDots.forEach(dot => {
         state.eliminationLog.push({
-          timestamp: now,
+          timestamp: currentTime,
           eliminatorId: winner.id,
           eliminatorName: winner.name,
           eliminatedId: dot.id,
           eliminatedName: dot.name
         });
         winner.eliminations += 1;
+        winner.size += GROWTH_FACTOR;
       });
-      
+
       state.dots = [winner];
       state.winner = winner;
       state.inProgress = false;
@@ -135,113 +85,112 @@ export const generateSimulation = (
       onComplete(winner);
       return;
     }
+
+    const attractionForce = getAttractionForce(elapsedTime, matchDuration);
     
-    updateDots(state.dots, deltaTime, scaleFactor);
-    
+    // Update dot positions and handle interactions
+    state.dots.forEach(dot1 => {
+      const velocity = dotVelocities.get(dot1.id);
+      if (!velocity) return;
+
+      // Find nearest smaller dot to chase
+      let nearestSmaller: { dot: Dot, distance: number } | null = null;
+      state.dots.forEach(dot2 => {
+        if (dot1 === dot2 || dot1.size <= dot2.size) return;
+        
+        const dx = dot2.x - dot1.x;
+        const dy = dot2.y - dot1.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (!nearestSmaller || distance < nearestSmaller.distance) {
+          nearestSmaller = { dot: dot2, distance };
+        }
+      });
+
+      // Apply attraction to smaller dots
+      if (nearestSmaller) {
+        const dx = nearestSmaller.dot.x - dot1.x;
+        const dy = nearestSmaller.dot.y - dot1.y;
+        const distance = nearestSmaller.distance;
+        
+        velocity.vx += (dx / distance) * dot1.speed * attractionForce * deltaTime;
+        velocity.vy += (dy / distance) * dot1.speed * attractionForce * deltaTime;
+      }
+
+      // Apply power effects
+      if (dot1.power?.active) {
+        switch (dot1.power.type) {
+          case 'speed':
+            velocity.vx *= 2;
+            velocity.vy *= 2;
+            break;
+          case 'teleport':
+            if (Math.random() < TELEPORT_CHANCE) {
+              dot1.x = Math.random() * (ARENA_WIDTH - dot1.size * 2) + dot1.size;
+              dot1.y = Math.random() * (ARENA_HEIGHT - dot1.size * 2) + dot1.size;
+              velocity.vx = (Math.random() - 0.5) * MAX_SPEED;
+              velocity.vy = (Math.random() - 0.5) * MAX_SPEED;
+            }
+            break;
+          case 'grow':
+            dot1.size += 0.1;
+            break;
+        }
+      }
+
+      // Update position
+      dot1.x += velocity.vx * deltaTime;
+      dot1.y += velocity.vy * deltaTime;
+
+      // Bounce off walls
+      if (dot1.x <= dot1.size || dot1.x >= ARENA_WIDTH - dot1.size) {
+        velocity.vx *= -1;
+        dot1.x = Math.max(dot1.size, Math.min(ARENA_WIDTH - dot1.size, dot1.x));
+      }
+      if (dot1.y <= dot1.size || dot1.y >= ARENA_HEIGHT - dot1.size) {
+        velocity.vy *= -1;
+        dot1.y = Math.max(dot1.size, Math.min(ARENA_HEIGHT - dot1.size, dot1.y));
+      }
+
+      // Normalize velocity
+      const speed = Math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy);
+      if (speed > MAX_SPEED) {
+        velocity.vx = (velocity.vx / speed) * MAX_SPEED;
+        velocity.vy = (velocity.vy / speed) * MAX_SPEED;
+      }
+    });
+
+    // Check for eliminations
     const eliminationEvents = checkEliminations(state.dots);
     if (eliminationEvents.length > 0) {
       state.eliminationLog = [...state.eliminationLog, ...eliminationEvents];
+      state.dots = state.dots.filter(dot => 
+        !eliminationEvents.some(event => event.eliminatedId === dot.id)
+      );
     }
-    
-    state.dots = state.dots.filter(dot => 
-      !eliminationEvents.some(event => event.eliminatedId === dot.id)
-    );
-    
+
+    // Check for winner
     if (state.dots.length === 1) {
-      const winner = state.dots[0];
-      state.winner = winner;
+      state.winner = state.dots[0];
       state.inProgress = false;
       onUpdate({ ...state });
-      onComplete(winner);
+      onComplete(state.winner);
       return;
     }
-    
+
     onUpdate({ ...state });
     
     if (state.inProgress) {
       animationFrameId = requestAnimationFrame(update);
     }
   };
-  
+
   animationFrameId = requestAnimationFrame(update);
   
   return () => {
     cancelAnimationFrame(animationFrameId);
     dotVelocities.clear();
   };
-};
-
-const updateDots = (dots: Dot[], deltaTime: number, scaleFactor: number) => {
-  const now = Date.now();
-  
-  dots.forEach(dot => {
-    if (dot.power) {
-      if (!dot.power.active && 
-          now - dot.power.lastUsed > dot.power.cooldown && 
-          Math.random() < POWER_ACTIVATION_CHANCE * scaleFactor) {
-        dot.power.active = true;
-        dot.power.lastUsed = now;
-      }
-      
-      if (dot.power.active && now - dot.power.lastUsed > dot.power.duration) {
-        dot.power.active = false;
-      }
-    }
-    
-    let moveSpeed = dot.speed;
-    if (dot.power?.active && dot.power.type === 'speed') {
-      moveSpeed *= 4;
-    }
-    
-    let velocity = dotVelocities.get(dot.id) || { vx: 0, vy: 0 };
-    
-    const angleChange = (Math.random() - 0.5) * Math.PI * deltaTime;
-    const currentAngle = Math.atan2(velocity.vy, velocity.vx);
-    const newAngle = currentAngle + angleChange;
-    
-    const targetVx = Math.cos(newAngle) * moveSpeed;
-    const targetVy = Math.sin(newAngle) * moveSpeed;
-    
-    velocity.vx = velocity.vx * MOMENTUM_FACTOR + targetVx * (1 - MOMENTUM_FACTOR);
-    velocity.vy = velocity.vy * MOMENTUM_FACTOR + targetVy * (1 - MOMENTUM_FACTOR);
-    
-    const speed = Math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy);
-    if (speed > MAX_SPEED * scaleFactor) {
-      velocity.vx = (velocity.vx / speed) * MAX_SPEED * scaleFactor;
-      velocity.vy = (velocity.vy / speed) * MAX_SPEED * scaleFactor;
-    } else if (speed < MIN_SPEED * scaleFactor) {
-      velocity.vx = (velocity.vx / speed) * MIN_SPEED * scaleFactor;
-      velocity.vy = (velocity.vy / speed) * MIN_SPEED * scaleFactor;
-    }
-    
-    if (dot.power?.active && dot.power.type === 'teleport' && Math.random() < TELEPORT_CHANCE) {
-      dot.x = Math.random() * ARENA_WIDTH;
-      dot.y = Math.random() * ARENA_HEIGHT;
-      velocity.vx = (Math.random() - 0.5) * MAX_SPEED * scaleFactor;
-      velocity.vy = (Math.random() - 0.5) * MAX_SPEED * scaleFactor;
-    } else {
-      dot.x += velocity.vx * deltaTime * 60;
-      dot.y += velocity.vy * deltaTime * 60;
-    }
-    
-    if (dot.x <= dot.size || dot.x >= ARENA_WIDTH - dot.size) {
-      velocity.vx *= -0.9;
-      dot.x = Math.max(dot.size, Math.min(ARENA_WIDTH - dot.size, dot.x));
-    }
-    if (dot.y <= dot.size || dot.y >= ARENA_HEIGHT - dot.size) {
-      velocity.vy *= -0.9;
-      dot.y = Math.max(dot.size, Math.min(ARENA_HEIGHT - dot.size, dot.y));
-    }
-    
-    dotVelocities.set(dot.id, velocity);
-    
-    if (dot.power?.active && dot.power.type === 'grow') {
-      const maxSize = 30 * scaleFactor;
-      if (dot.size < maxSize) {
-        dot.size += 0.1 * scaleFactor;
-      }
-    }
-  });
 };
 
 const checkEliminations = (dots: Dot[]): EliminationEvent[] => {
@@ -257,17 +206,14 @@ const checkEliminations = (dots: Dot[]): EliminationEvent[] => {
       const dy = dot2.y - dot1.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
       
-      if (distance < Math.max(dot1.size, dot2.size) - ELIMINATION_DISTANCE) {
+      if (distance < Math.max(dot1.size, dot2.size) + ELIMINATION_DISTANCE) {
         let eliminated: Dot;
         let eliminator: Dot;
         
-        const sizeDifference = Math.abs(dot1.size - dot2.size);
-        const minSizeDifference = 2;
-        
-        if (dot1.size > dot2.size && sizeDifference >= minSizeDifference) {
+        if (dot1.size > dot2.size && dot1.size - dot2.size >= 2) {
           eliminator = dot1;
           eliminated = dot2;
-        } else if (dot2.size > dot1.size && sizeDifference >= minSizeDifference) {
+        } else if (dot2.size > dot1.size && dot2.size - dot1.size >= 2) {
           eliminator = dot2;
           eliminated = dot1;
         } else {
