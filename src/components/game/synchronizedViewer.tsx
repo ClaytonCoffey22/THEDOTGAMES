@@ -60,7 +60,8 @@ const SynchronizedViewer: React.FC<SynchronizedViewerProps> = ({ battleDate, wid
     };
   }, [battleDate]);
 
-  if (!simulationState) {
+  // Replace the loading check with:
+  if (!simulationState || simulationState.dots.length === 0) {
     return (
       <div className="flex items-center justify-center h-96 bg-gray-800 rounded-lg border border-gray-700">
         <div className="text-center">

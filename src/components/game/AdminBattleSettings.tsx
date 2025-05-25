@@ -49,7 +49,10 @@ const AdminBattleSettings: React.FC<AdminBattleSettingsProps> = ({ onSettingsCha
 
       if (data) {
         setSettings(data);
-        onSettingsChange?.(data);
+        // Only call onSettingsChange if it's different from current settings
+        if (JSON.stringify(data) !== JSON.stringify(settings)) {
+          onSettingsChange?.(data);
+        }
       }
     } catch (error) {
       console.error("Failed to load battle settings:", error);
@@ -58,7 +61,7 @@ const AdminBattleSettings: React.FC<AdminBattleSettingsProps> = ({ onSettingsCha
   // Load current settings on component mount
   useEffect(() => {
     loadCurrentSettings();
-  });
+  }, []);
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -46,21 +46,25 @@ export class SynchronizedBattleEngine {
       simulationDate: new Date().toISOString(),
     };
 
-    // Start the simulation and sync to database
+    // Sync initial state immediately so viewers can see it
+    await this.syncBattleState(initialState);
+
     this.isRunning = true;
 
     await generateSimulation(
       initialState,
       async (state: SimulationState) => {
         if (this.isRunning && this.frameNumber % 30 === 0) {
-          // Sync every 30 frames (0.5 seconds)
           await this.syncBattleState(state);
         }
         this.frameNumber++;
       },
       async (winner: Dot) => {
         console.log("Synchronized battle completed, winner:", winner.name);
-        await this.completeBattle(winner, initialState);
+        // Sync final state
+        const finalState = { ...initialState, winner, inProgress: false };
+        await this.syncBattleState(finalState);
+        await this.completeBattle(winner, finalState);
         this.stop();
       }
     );
