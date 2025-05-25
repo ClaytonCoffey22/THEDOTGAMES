@@ -72,11 +72,23 @@ export class SynchronizedBattleEngine {
 
   private async syncBattleState(state: SimulationState) {
     try {
-      await supabase.rpc("update_live_battle_state", {
+      console.log("Syncing battle state...", {
+        battleDate: this.battleDate,
+        frameNumber: this.frameNumber,
+        dotsCount: state.dots.length,
+      });
+
+      const { data, error } = await supabase.rpc("update_live_battle_state", {
         p_battle_date: this.battleDate,
         p_simulation_state: state,
         p_frame_number: this.frameNumber,
       });
+
+      console.log("Sync result:", { data, error });
+
+      if (error) {
+        console.error("Sync error:", error);
+      }
     } catch (error) {
       console.error("Failed to sync battle state:", error);
     }
