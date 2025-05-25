@@ -1,170 +1,214 @@
-import { Dot, SimulationState, EliminationEvent } from '../types';
+import { Dot, EliminationEvent, SimulationState } from "../types";
+import { supabase } from "./supabase";
+
+interface BattleConfig {
+  intensity: string;
+  duration: string;
+  powerFrequency: string;
+  aggressionMultiplier: number;
+  speedMultiplier: number;
+  powerChance: number;
+  battleDurationMinutes: number;
+  arenaShrinksAt: number;
+}
+
+const DEFAULT_CONFIG: BattleConfig = {
+  intensity: "normal",
+  duration: "normal",
+  powerFrequency: "normal",
+  aggressionMultiplier: 1.0,
+  speedMultiplier: 1.0,
+  powerChance: 0.5,
+  battleDurationMinutes: 2,
+  arenaShrinksAt: 0.7,
+};
+
+// Load battle configuration from database
+async function loadBattleConfig(): Promise<BattleConfig> {
+  try {
+    const { data, error } = await supabase.rpc("get_battle_settings");
+
+    if (error) {
+      console.error("Error loading battle config:", error);
+      return DEFAULT_CONFIG;
+    }
+
+    return data || DEFAULT_CONFIG;
+  } catch (error) {
+    console.error("Failed to load battle config:", error);
+    return DEFAULT_CONFIG;
+  }
+}
 
 const ARENA_WIDTH = 800;
 const ARENA_HEIGHT = 600;
-const UPDATE_INTERVAL = 1000 / 60; // 60 FPS
-const ELIMINATION_DISTANCE = 10;
-const GROWTH_FACTOR = 1.2;
-const MOMENTUM_FACTOR = 0.95; // Increased for smoother movement
-const MAX_SPEED = 5; // Reduced for smoother movement
-const MIN_SPEED = 2;
-const POWER_ACTIVATION_CHANCE = 0.05;
-const POWER_DURATION_BASE = 4000;
-const POWER_COOLDOWN_BASE = 6000;
-const MATCH_TIME_PER_ROUND = 3000;
-const TELEPORT_CHANCE = 0.08;
-
-// Match duration based on participant count (in milliseconds)
-const getMatchDuration = (participantCount: number): number => {
-  const rounds = Math.ceil(Math.log2(participantCount));
-  return rounds * MATCH_TIME_PER_ROUND;
-};
-
-// Calculate attraction force as time progresses
-const getAttractionForce = (elapsedTime: number, totalDuration: number): number => {
-  const timeProgress = elapsedTime / totalDuration;
-  // Smoother attraction force curve
-  return Math.min(4, 0.5 + Math.pow(timeProgress, 1.5) * 5);
-};
 
 interface DotVelocity {
   vx: number;
   vy: number;
 }
 
+interface DotPersonality {
+  aggression: number;
+  cowardice: number;
+  packHunter: boolean;
+  berserker: boolean;
+  targetId?: string;
+  fleeingFrom?: string;
+}
+
 const dotVelocities = new Map<string, DotVelocity>();
+const dotPersonalities = new Map<string, DotPersonality>();
 
-interface BracketMatch {
-  dot1: Dot;
-  dot2: Dot;
-  winner?: Dot;
-  completed: boolean;
+enum BattlePhase {
+  EARLY = "early",
+  MIDDLE = "middle",
+  LATE = "late",
+  FINAL = "final",
 }
 
-class TournamentManager {
-  private matches: BracketMatch[] = [];
-  private currentRound: number = 0;
-  private roundStartTime: number = 0;
-
-  constructor(dots: Dot[]) {
-    this.initializeBracket(dots);
-  }
-
-  private initializeBracket(dots: Dot[]) {
-    const shuffledDots = [...dots].sort(() => Math.random() - 0.5);
-    
-    for (let i = 0; i < shuffledDots.length; i += 2) {
-      if (i + 1 < shuffledDots.length) {
-        this.matches.push({
-          dot1: shuffledDots[i],
-          dot2: shuffledDots[i + 1],
-          completed: false
-        });
-      } else {
-        this.matches.push({
-          dot1: shuffledDots[i],
-          dot2: null as any,
-          winner: shuffledDots[i],
-          completed: true
-        });
-      }
-    }
-  }
-
-  public updateMatches(state: SimulationState): void {
-    const currentTime = Date.now();
-    
-    if (this.roundStartTime === 0) {
-      this.roundStartTime = currentTime;
-    }
-
-    if (currentTime - this.roundStartTime >= MATCH_TIME_PER_ROUND) {
-      this.completeRound(state);
-      this.roundStartTime = currentTime;
-    }
-  }
-
-  private completeRound(state: SimulationState): void {
-    const incompleteMatches = this.matches.filter(m => !m.completed);
-    const nextRoundMatches: BracketMatch[] = [];
-
-    for (const match of incompleteMatches) {
-      if (!match.winner) {
-        const randomFactor = Math.random() * 0.2;
-        const dot1Score = match.dot1.size * (1 + randomFactor);
-        const dot2Score = match.dot2.size * (1 + randomFactor);
-        
-        match.winner = dot1Score > dot2Score ? match.dot1 : match.dot2;
-        match.completed = true;
-
-        state.eliminationLog.push({
-          timestamp: Date.now(),
-          eliminatorId: match.winner.id,
-          eliminatorName: match.winner.name,
-          eliminatedId: (match.winner === match.dot1 ? match.dot2 : match.dot1).id,
-          eliminatedName: (match.winner === match.dot1 ? match.dot2 : match.dot1).name
-        });
-
-        match.winner.eliminations++;
-        match.winner.size *= GROWTH_FACTOR;
-      }
-    }
-
-    for (let i = 0; i < this.matches.length; i += 2) {
-      if (i + 1 < this.matches.length) {
-        nextRoundMatches.push({
-          dot1: this.matches[i].winner!,
-          dot2: this.matches[i + 1].winner!,
-          completed: false
-        });
-      } else if (this.matches[i].winner) {
-        nextRoundMatches.push({
-          dot1: this.matches[i].winner,
-          dot2: null as any,
-          winner: this.matches[i].winner,
-          completed: true
-        });
-      }
-    }
-
-    this.matches = nextRoundMatches;
-    this.currentRound++;
-
-    if (this.matches.length === 1 && this.matches[0].completed) {
-      state.winner = this.matches[0].winner!;
-      state.inProgress = false;
-    }
-  }
+function getBattlePhase(elapsedTime: number, totalDuration: number): BattlePhase {
+  const progress = elapsedTime / totalDuration;
+  if (progress < 0.3) return BattlePhase.EARLY;
+  if (progress < 0.7) return BattlePhase.MIDDLE;
+  if (progress < 0.9) return BattlePhase.LATE;
+  return BattlePhase.FINAL;
 }
 
-export const generateSimulation = (
+function getArenaSize(phase: BattlePhase, elapsedTime: number, totalDuration: number, config: BattleConfig) {
+  const progress = elapsedTime / totalDuration;
+  let shrinkFactor = 1;
+
+  // Use config-defined shrink start point
+  if (progress > config.arenaShrinksAt) {
+    const shrinkProgress = (progress - config.arenaShrinksAt) / (1 - config.arenaShrinksAt);
+
+    switch (phase) {
+      case BattlePhase.LATE:
+        shrinkFactor = 1 - shrinkProgress * 0.3; // Shrink to 70%
+        break;
+      case BattlePhase.FINAL:
+        shrinkFactor = 0.5 + (1 - shrinkProgress) * 0.2; // Down to 50%
+        break;
+    }
+  }
+
+  return {
+    width: ARENA_WIDTH * shrinkFactor,
+    height: ARENA_HEIGHT * shrinkFactor,
+    centerX: ARENA_WIDTH / 2,
+    centerY: ARENA_HEIGHT / 2,
+  };
+}
+
+function initializeDotPersonality(_dot: Dot, config: BattleConfig): DotPersonality {
+  const random = Math.random;
+  const baseAggression = 0.3 + random() * 0.7;
+
+  return {
+    aggression: baseAggression * config.aggressionMultiplier,
+    cowardice: random() * 0.6,
+    packHunter: random() < 0.4,
+    berserker: false,
+    targetId: undefined,
+    fleeingFrom: undefined,
+  };
+}
+
+function findBestTarget(hunter: Dot, allDots: Dot[], personality: DotPersonality): Dot | null {
+  const validTargets = allDots.filter((target) => {
+    if (target.id === hunter.id) return false;
+    const sizeAdvantage = hunter.size - target.size;
+    return sizeAdvantage >= 2;
+  });
+
+  if (validTargets.length === 0) return null;
+
+  validTargets.sort((a, b) => {
+    const distA = Math.sqrt((a.x - hunter.x) ** 2 + (a.y - hunter.y) ** 2);
+    const distB = Math.sqrt((b.x - hunter.x) ** 2 + (b.y - hunter.y) ** 2);
+
+    if (personality.packHunter) {
+      const aIsTargeted = Array.from(dotPersonalities.values()).filter((p) => p.targetId === a.id).length;
+      const bIsTargeted = Array.from(dotPersonalities.values()).filter((p) => p.targetId === b.id).length;
+
+      if (aIsTargeted !== bIsTargeted) {
+        return bIsTargeted - aIsTargeted;
+      }
+    }
+
+    return distA - distB;
+  });
+
+  return validTargets[0];
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function shouldFlee(dot: Dot, allDots: Dot[], _personality: DotPersonality): Dot | null {
+  const threats = allDots.filter((other) => {
+    if (other.id === dot.id) return false;
+    const sizeAdvantage = other.size - dot.size;
+    const distance = Math.sqrt((other.x - dot.x) ** 2 + (other.y - dot.y) ** 2);
+
+    return sizeAdvantage >= 3 && distance < 100;
+  });
+
+  if (threats.length === 0) return null;
+
+  threats.sort((a, b) => {
+    const distA = Math.sqrt((a.x - dot.x) ** 2 + (a.y - dot.y) ** 2);
+    const distB = Math.sqrt((b.x - dot.x) ** 2 + (b.y - dot.y) ** 2);
+    const sizeA = a.size - dot.size;
+    const sizeB = b.size - dot.size;
+
+    return distA - sizeA * 10 - (distB - sizeB * 10);
+  });
+
+  return threats[0];
+}
+
+export const generateSimulation = async (
   initialState: SimulationState,
   onUpdate: (state: SimulationState) => void,
   onComplete: (winner: Dot) => void
 ) => {
-  let state = { ...initialState };
+  // Load battle configuration from database
+  const config = await loadBattleConfig();
+  console.log("Using battle config:", config);
+
+  const state = { ...initialState };
   let lastFrameTime = performance.now();
   let animationFrameId: number;
   const startTime = Date.now();
-  const matchDuration = getMatchDuration(state.dots.length);
-  const tournament = new TournamentManager(state.dots);
-  
-  // Initialize velocities with smoother initial movement
-  state.dots.forEach(dot => {
+
+  // Calculate match duration based on config
+  const baseDuration = config.battleDurationMinutes * 60 * 1000; // Convert to milliseconds
+  const participantFactor = Math.max(0.5, Math.min(2, state.dots.length / 20));
+  const matchDuration = baseDuration * participantFactor;
+
+  console.log(`Battle duration: ${matchDuration / 1000}s for ${state.dots.length} participants`);
+
+  // Initialize personalities and velocities with config
+  state.dots.forEach((dot) => {
     const angle = Math.random() * Math.PI * 2;
-    const speed = MIN_SPEED + Math.random() * (MAX_SPEED - MIN_SPEED);
+    const baseSpeed = 2 + Math.random() * 6; // 2-8 base speed
+    const speed = baseSpeed * config.speedMultiplier;
+
     dotVelocities.set(dot.id, {
       vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed
+      vy: Math.sin(angle) * speed,
     });
 
-    if (Math.random() < 0.3) {
+    dotPersonalities.set(dot.id, initializeDotPersonality(dot, config));
+
+    // Apply power chance from config
+    if (Math.random() < config.powerChance) {
       dot.power = {
         type: ["speed", "shield", "teleport", "grow"][Math.floor(Math.random() * 4)] as "speed" | "shield" | "teleport" | "grow",
-        duration: POWER_DURATION_BASE + Math.random() * 2000,
+        duration: 3000 + Math.random() * 5000,
         active: false,
-        cooldown: POWER_COOLDOWN_BASE + Math.random() * 4000,
-        lastUsed: 0
+        cooldown: 8000 + Math.random() * 7000,
+        lastUsed: 0,
       };
     }
   });
@@ -176,11 +220,13 @@ export const generateSimulation = (
     const elapsedTime = Date.now() - startTime;
     state.lastUpdateTime = Date.now();
 
-    tournament.updateMatches(state);
+    const battlePhase = getBattlePhase(elapsedTime, matchDuration);
+    const arena = getArenaSize(battlePhase, elapsedTime, matchDuration, config);
 
+    // End battle if time limit reached or only one dot left
     if (elapsedTime >= matchDuration || state.dots.length <= 1) {
       if (!state.winner && state.dots.length > 0) {
-        state.winner = state.dots[0];
+        state.winner = state.dots.reduce((largest, current) => (current.size > largest.size ? current : largest));
         state.inProgress = false;
       }
       onUpdate({ ...state });
@@ -190,160 +236,261 @@ export const generateSimulation = (
       return;
     }
 
-    const attractionForce = getAttractionForce(elapsedTime, matchDuration);
-    
-    state.dots.forEach(dot1 => {
-      if (dot1.power && !dot1.power.active && 
-          currentTime - dot1.power.lastUsed >= dot1.power.cooldown &&
-          Math.random() < POWER_ACTIVATION_CHANCE * deltaTime) {
-        dot1.power.active = true;
-        dot1.power.lastUsed = currentTime;
+    // Phase-based modifiers enhanced by config
+    let phaseAggressionMultiplier = config.aggressionMultiplier;
+    let phaseSpeedMultiplier = config.speedMultiplier;
+
+    switch (battlePhase) {
+      case BattlePhase.MIDDLE:
+        phaseAggressionMultiplier *= 1.3;
+        phaseSpeedMultiplier *= 1.1;
+        break;
+      case BattlePhase.LATE:
+        phaseAggressionMultiplier *= 1.6;
+        phaseSpeedMultiplier *= 1.3;
+        break;
+      case BattlePhase.FINAL:
+        phaseAggressionMultiplier *= 2.0;
+        phaseSpeedMultiplier *= 1.5;
+        // All dots become berserkers in final phase
+        dotPersonalities.forEach((personality) => {
+          personality.berserker = true;
+          personality.aggression = Math.min(1, personality.aggression * 1.5);
+        });
+        break;
+    }
+
+    // Enhanced power activation chance based on config
+    const basePowerChance = 0.05 * (config.powerChance / 0.5); // Scale based on config
+
+    state.dots.forEach((dot) => {
+      const personality = dotPersonalities.get(dot.id);
+      const velocity = dotVelocities.get(dot.id);
+      if (!personality || !velocity) return;
+
+      // Power activation with config-based frequency
+      const powerChance = basePowerChance * phaseAggressionMultiplier;
+      if (
+        dot.power &&
+        !dot.power.active &&
+        currentTime - dot.power.lastUsed >= dot.power.cooldown &&
+        Math.random() < powerChance * deltaTime
+      ) {
+        dot.power.active = true;
+        dot.power.lastUsed = currentTime;
         setTimeout(() => {
-          if (dot1.power) {
-            dot1.power.active = false;
+          if (dot.power) {
+            dot.power.active = false;
           }
-        }, dot1.power.duration);
+        }, dot.power.duration);
       }
 
-      const velocity = dotVelocities.get(dot1.id);
-      if (!velocity) return;
+      // Behavior logic (same as before but with config multipliers)
+      let targetDot: Dot | null = null;
+      let fleeDot: Dot | null = null;
 
-      let nearestSmaller: { dot: Dot, distance: number } | null = null;
-      state.dots.forEach(dot2 => {
-        if (dot1 === dot2 || dot1.size <= dot2.size) return;
-        
-        const dx = dot2.x - dot1.x;
-        const dy = dot2.y - dot1.y;
+      if (!personality.berserker && Math.random() < personality.cowardice) {
+        fleeDot = shouldFlee(dot, state.dots, personality);
+        personality.fleeingFrom = fleeDot?.id;
+      }
+
+      if (!fleeDot && Math.random() < personality.aggression * phaseAggressionMultiplier) {
+        targetDot = findBestTarget(dot, state.dots, personality);
+        personality.targetId = targetDot?.id;
+      }
+
+      // Apply movement based on behavior
+      let targetX = dot.x;
+      let targetY = dot.y;
+      let behaviorSpeedMultiplier = 1;
+
+      if (fleeDot) {
+        const dx = dot.x - fleeDot.x;
+        const dy = dot.y - fleeDot.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
-        
-        if (!nearestSmaller || distance < nearestSmaller.distance) {
-          nearestSmaller = { dot: dot2, distance };
+        if (distance > 0) {
+          targetX = dot.x + (dx / distance) * 100;
+          targetY = dot.y + (dy / distance) * 100;
+          behaviorSpeedMultiplier = 1.5;
         }
-      });
-
-      if (nearestSmaller) {
-        const dx = nearestSmaller.dot.x - dot1.x;
-        const dy = nearestSmaller.dot.y - dot1.y;
-        const distance = nearestSmaller.distance;
-        
-        velocity.vx += (dx / distance) * dot1.speed * attractionForce * deltaTime;
-        velocity.vy += (dy / distance) * dot1.speed * attractionForce * deltaTime;
+      } else if (targetDot) {
+        targetX = targetDot.x;
+        targetY = targetDot.y;
+        behaviorSpeedMultiplier = personality.berserker ? 2.0 : 1.3;
+      } else {
+        if (battlePhase === BattlePhase.LATE || battlePhase === BattlePhase.FINAL) {
+          const centerPull = 0.3;
+          targetX = dot.x + (arena.centerX - dot.x) * centerPull + (Math.random() - 0.5) * 100;
+          targetY = dot.y + (arena.centerY - dot.y) * centerPull + (Math.random() - 0.5) * 100;
+        } else {
+          targetX = dot.x + (Math.random() - 0.5) * 150;
+          targetY = dot.y + (Math.random() - 0.5) * 150;
+        }
       }
 
-      if (dot1.power?.active) {
-        switch (dot1.power.type) {
-          case 'speed':
-            velocity.vx *= 1.5;
-            velocity.vy *= 1.5;
+      // Apply movement
+      const dx = targetX - dot.x;
+      const dy = targetY - dot.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance > 0) {
+        const moveForce = (dot.speed * behaviorSpeedMultiplier * phaseSpeedMultiplier) / distance;
+        velocity.vx += dx * moveForce * deltaTime * 10;
+        velocity.vy += dy * moveForce * deltaTime * 10;
+      }
+
+      // Apply power effects
+      if (dot.power?.active) {
+        switch (dot.power.type) {
+          case "speed":
+            velocity.vx *= 1.8;
+            velocity.vy *= 1.8;
             break;
-          case 'teleport':
-            if (Math.random() < TELEPORT_CHANCE * deltaTime) {
-              dot1.x = Math.random() * (ARENA_WIDTH - dot1.size * 2) + dot1.size;
-              dot1.y = Math.random() * (ARENA_HEIGHT - dot1.size * 2) + dot1.size;
-              velocity.vx = (Math.random() - 0.5) * MAX_SPEED;
-              velocity.vy = (Math.random() - 0.5) * MAX_SPEED;
+          case "teleport":
+            if (Math.random() < 0.15 * deltaTime) {
+              dot.x = arena.centerX - arena.width / 2 + Math.random() * arena.width;
+              dot.y = arena.centerY - arena.height / 2 + Math.random() * arena.height;
+              velocity.vx = (Math.random() - 0.5) * 8 * config.speedMultiplier;
+              velocity.vy = (Math.random() - 0.5) * 8 * config.speedMultiplier;
             }
             break;
-          case 'grow':
-            dot1.size += 0.05 * deltaTime;
+          case "grow":
+            dot.size += 0.1 * deltaTime;
             break;
         }
       }
 
       // Apply momentum
-      velocity.vx *= MOMENTUM_FACTOR;
-      velocity.vy *= MOMENTUM_FACTOR;
+      velocity.vx *= 0.92;
+      velocity.vy *= 0.92;
 
-      // Update position with delta time
-      dot1.x += velocity.vx * deltaTime * 60;
-      dot1.y += velocity.vy * deltaTime * 60;
+      // Update position
+      dot.x += velocity.vx * deltaTime * 60;
+      dot.y += velocity.vy * deltaTime * 60;
 
-      // Bounce off walls with momentum preservation
-      if (dot1.x <= dot1.size || dot1.x >= ARENA_WIDTH - dot1.size) {
-        velocity.vx *= -MOMENTUM_FACTOR;
-        dot1.x = Math.max(dot1.size, Math.min(ARENA_WIDTH - dot1.size, dot1.x));
+      // Arena boundaries (shrinking arena pushes dots inward)
+      const arenaLeft = arena.centerX - arena.width / 2;
+      const arenaRight = arena.centerX + arena.width / 2;
+      const arenaTop = arena.centerY - arena.height / 2;
+      const arenaBottom = arena.centerY + arena.height / 2;
+
+      if (dot.x <= arenaLeft + dot.size || dot.x >= arenaRight - dot.size) {
+        velocity.vx *= -0.7;
+        dot.x = Math.max(arenaLeft + dot.size, Math.min(arenaRight - dot.size, dot.x));
+
+        if (battlePhase === BattlePhase.LATE || battlePhase === BattlePhase.FINAL) {
+          dot.size = Math.max(5, dot.size - 0.5);
+        }
       }
-      if (dot1.y <= dot1.size || dot1.y >= ARENA_HEIGHT - dot1.size) {
-        velocity.vy *= -MOMENTUM_FACTOR;
-        dot1.y = Math.max(dot1.size, Math.min(ARENA_HEIGHT - dot1.size, dot1.y));
+      if (dot.y <= arenaTop + dot.size || dot.y >= arenaBottom - dot.size) {
+        velocity.vy *= -0.7;
+        dot.y = Math.max(arenaTop + dot.size, Math.min(arenaBottom - dot.size, dot.y));
+
+        if (battlePhase === BattlePhase.LATE || battlePhase === BattlePhase.FINAL) {
+          dot.size = Math.max(5, dot.size - 0.5);
+        }
       }
 
-      // Normalize velocity with smooth clamping
+      // Limit velocity with config multipliers
       const speed = Math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy);
-      if (speed > MAX_SPEED) {
-        const scale = 1 - (1 - MAX_SPEED / speed) * 0.1;
-        velocity.vx *= scale;
-        velocity.vy *= scale;
+      const maxSpeed = 8 * phaseSpeedMultiplier;
+      if (speed > maxSpeed) {
+        velocity.vx = (velocity.vx / speed) * maxSpeed;
+        velocity.vy = (velocity.vy / speed) * maxSpeed;
       }
     });
 
-    const eliminationEvents = checkEliminations(state.dots);
+    // Check for eliminations with config-based parameters
+    const eliminationEvents = checkEliminations(state.dots, battlePhase, config);
     if (eliminationEvents.length > 0) {
       state.eliminationLog = [...state.eliminationLog, ...eliminationEvents];
-      state.dots = state.dots.filter(dot => 
-        !eliminationEvents.some(event => event.eliminatedId === dot.id)
-      );
+      state.dots = state.dots.filter((dot) => !eliminationEvents.some((event) => event.eliminatedId === dot.id));
+
+      eliminationEvents.forEach((event) => {
+        dotVelocities.delete(event.eliminatedId);
+        dotPersonalities.delete(event.eliminatedId);
+      });
     }
 
     onUpdate({ ...state });
-    
+
     if (state.inProgress) {
       animationFrameId = requestAnimationFrame(update);
     }
   };
 
   animationFrameId = requestAnimationFrame(update);
-  
+
   return () => {
     cancelAnimationFrame(animationFrameId);
     dotVelocities.clear();
+    dotPersonalities.clear();
   };
 };
 
-const checkEliminations = (dots: Dot[]): EliminationEvent[] => {
+const checkEliminations = (dots: Dot[], phase: BattlePhase, config: BattleConfig): EliminationEvent[] => {
   const eliminationEvents: EliminationEvent[] = [];
-  
+
+  // Base elimination distance modified by config intensity
+  const baseDistance = 15;
+  const intensityMultiplier = config.aggressionMultiplier;
+  const phaseElimDistance = phase === BattlePhase.FINAL ? baseDistance * 1.5 * intensityMultiplier : baseDistance * intensityMultiplier;
+
+  // Growth factor based on config
+  const baseGrowth = 1.5;
+  const phaseGrowthFactor = phase === BattlePhase.FINAL ? baseGrowth * 1.3 * intensityMultiplier : baseGrowth * intensityMultiplier;
+
   for (let i = 0; i < dots.length; i++) {
     const dot1 = dots[i];
-    
+
     for (let j = i + 1; j < dots.length; j++) {
       const dot2 = dots[j];
-      
+
       const dx = dot2.x - dot1.x;
       const dy = dot2.y - dot1.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
-      
-      if (distance < Math.max(dot1.size, dot2.size) + ELIMINATION_DISTANCE) {
+
+      if (distance < Math.max(dot1.size, dot2.size) + phaseElimDistance) {
         let eliminated: Dot;
         let eliminator: Dot;
-        
-        if (dot1.size > dot2.size && dot1.size - dot2.size >= 2) {
+
+        // Size difference needed (easier elimination with higher intensity)
+        const minSizeDiff = Math.max(1, 2 - intensityMultiplier);
+
+        if (dot1.size > dot2.size && dot1.size - dot2.size >= minSizeDiff) {
           eliminator = dot1;
           eliminated = dot2;
-        } else if (dot2.size > dot1.size && dot2.size - dot1.size >= 2) {
+        } else if (dot2.size > dot1.size && dot2.size - dot1.size >= minSizeDiff) {
           eliminator = dot2;
           eliminated = dot1;
         } else {
           continue;
         }
-        
-        if (eliminated.power?.active && eliminated.power.type === 'shield') {
+
+        if (eliminated.power?.active && eliminated.power.type === "shield") {
           continue;
         }
-        
+
         eliminationEvents.push({
           timestamp: Date.now(),
           eliminatorId: eliminator.id,
           eliminatorName: eliminator.name,
           eliminatedId: eliminated.id,
-          eliminatedName: eliminated.name
+          eliminatedName: eliminated.name,
         });
-        
-        eliminator.size += GROWTH_FACTOR;
+
+        eliminator.size += phaseGrowthFactor;
         eliminator.eliminations += 1;
+
+        // Berserker bonus with config scaling
+        const personality = dotPersonalities.get(eliminator.id);
+        if (personality?.berserker) {
+          eliminator.size += 0.5 * intensityMultiplier;
+          personality.aggression = Math.min(1, personality.aggression + 0.1 * intensityMultiplier);
+        }
       }
     }
   }
-  
+
   return eliminationEvents;
 };

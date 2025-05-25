@@ -1,16 +1,10 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
-import { User, Session, AuthChangeEvent } from "@supabase/supabase-js";
-import {
-  initializeTodaysBattle,
-  registerForTodaysBattle,
-  getTodaysParticipants,
-  completeTodaysBattle,
-  updateBattleStatus,
-  getRegisteredLeaderboard,
-} from "../utils/battleManager";
-import { supabase } from "../utils/supabase";
+import { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { BattleRegistration, DailyBattle, Dot, RegisteredLeaderboardEntry, SimulationState, TodaysParticipant } from "../types";
+import { getRegisteredLeaderboard, getTodaysParticipants, initializeTodaysBattle, registerForTodaysBattle } from "../utils/battleManager";
+import { SynchronizedBattleManager } from "../utils/BattleSync";
 import { generateSimulation } from "../utils/simulation";
-import { Dot, SimulationState } from "../types";
+import { supabase } from "../utils/supabase";
 
 interface GameContextType {
   // Authentication state
@@ -19,8 +13,8 @@ interface GameContextType {
   signOut: () => Promise<void>;
 
   // Daily battle state
-  currentBattle: any | null;
-  todaysParticipants: any[];
+  currentBattle: DailyBattle | null;
+  todaysParticipants: TodaysParticipant[];
   canRegisterToday: boolean;
   registrationStatus: "registration" | "in_progress" | "completed";
 
@@ -29,15 +23,12 @@ interface GameContextType {
   isSimulationRunning: boolean;
 
   // Actions
-  registerDotForBattle: (
-    dotName: string,
-    deviceId: string
-  ) => Promise<{ success: boolean; message: string }>;
+  registerDotForBattle: (dotName: string, deviceId: string) => Promise<BattleRegistration>;
   startTodaysBattle: () => Promise<void>;
 
   // Leaderboards
-  todaysLeaderboard: any[];
-  allTimeLeaderboard: any[];
+  todaysLeaderboard: TodaysParticipant[];
+  allTimeLeaderboard: RegisteredLeaderboardEntry[];
 
   // Timing
   nextBattleTime: Date | null;
@@ -63,60 +54,104 @@ export const useGame = () => {
   return context;
 };
 
-export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
+export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Authentication state
   const [user, setUser] = useState<User | null>(null);
 
   // Daily battle state
-  const [currentBattle, setCurrentBattle] = useState<any | null>(null);
-  const [todaysParticipants, setTodaysParticipants] = useState<any[]>([]);
+  const [currentBattle, setCurrentBattle] = useState<DailyBattle | null>(null);
+  const [todaysParticipants, setTodaysParticipants] = useState<TodaysParticipant[]>([]);
   const [canRegisterToday, setCanRegisterToday] = useState(true);
-  const [registrationStatus, setRegistrationStatus] = useState<
-    "registration" | "in_progress" | "completed"
-  >("registration");
+  const [registrationStatus, setRegistrationStatus] = useState<"registration" | "in_progress" | "completed">("registration");
 
   // Simulation state
-  const [simulationState, setSimulationState] = useState<SimulationState>(
-    DEFAULT_SIMULATION_STATE
-  );
+  const [simulationState, setSimulationState] = useState<SimulationState>(DEFAULT_SIMULATION_STATE);
   const [isSimulationRunning, setIsSimulationRunning] = useState(false);
 
   // Leaderboard state
-  const [todaysLeaderboard, setTodaysLeaderboard] = useState<any[]>([]);
-  const [allTimeLeaderboard, setAllTimeLeaderboard] = useState<any[]>([]);
+  const [todaysLeaderboard, setTodaysLeaderboard] = useState<TodaysParticipant[]>([]);
+  const [allTimeLeaderboard, setAllTimeLeaderboard] = useState<RegisteredLeaderboardEntry[]>([]);
 
   // Timing state
   const [nextBattleTime, setNextBattleTime] = useState<Date | null>(null);
   const [timeUntilBattle, setTimeUntilBattle] = useState<string | null>(null);
 
+  // Battle synchronization
+  const [battleManager] = useState(
+    () =>
+      new SynchronizedBattleManager((state) => {
+        console.log("Battle state synchronized:", state);
+
+        // Update local state based on synchronized battle state
+        if (state.status === "in_progress" && !isSimulationRunning && state.simulation_data) {
+          // Start watching the synchronized simulation
+          setSimulationState(state.simulation_data);
+          setIsSimulationRunning(true);
+          setRegistrationStatus("in_progress");
+        } else if (state.status === "completed") {
+          setIsSimulationRunning(false);
+          setRegistrationStatus("completed");
+          if (state.simulation_data) {
+            setSimulationState({
+              ...state.simulation_data,
+              inProgress: false,
+            });
+          }
+          // Refresh participants and leaderboard
+          refreshData();
+        }
+
+        setRegistrationStatus(state.status);
+      })
+  );
+
   // Initialize authentication state
   useEffect(() => {
-    supabase.auth
-      .getSession()
-      .then(({ data: { session } }: { data: { session: Session | null } }) => {
-        setUser(session?.user ?? null);
-      });
+    supabase.auth.getSession().then(({ data: { session } }: { data: { session: Session | null } }) => {
+      setUser(session?.user ?? null);
+    });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      (_event: AuthChangeEvent, session: Session | null) => {
-        setUser(session?.user ?? null);
-      }
-    );
+    } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => {
+      setUser(session?.user ?? null);
+    });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // Calculate next battle time
+  // Initialize battle manager
+  useEffect(() => {
+    const initBattleManager = async () => {
+      const battleState = await battleManager.initialize();
+      if (battleState) {
+        setRegistrationStatus(battleState.status);
+        if (battleState.simulation_data) {
+          setSimulationState(battleState.simulation_data);
+        }
+        if (battleState.status === "in_progress") {
+          setIsSimulationRunning(true);
+        }
+      }
+    };
+
+    initBattleManager();
+
+    return () => {
+      battleManager.cleanup();
+    };
+  }, [battleManager]);
+
+  // Calculate next battle time (11 PM ET)
   useEffect(() => {
     const calculateNextBattleTime = () => {
       const now = new Date();
       const battleTime = new Date();
+
+      // Set to 11 PM ET (23:00)
       battleTime.setHours(23, 0, 0, 0);
 
+      // If it's already past 11 PM today, set for tomorrow
       if (now > battleTime) {
         battleTime.setDate(battleTime.getDate() + 1);
       }
@@ -147,9 +182,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       const seconds = Math.floor((diff % (1000 * 60)) / 1000);
 
       setTimeUntilBattle(
-        `${hours.toString().padStart(2, "0")}:${minutes
-          .toString()
-          .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+        `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
       );
     };
 
@@ -159,38 +192,54 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [nextBattleTime]);
 
   // Initialize today's battle and load participants
-  useEffect(() => {
-    const initializeToday = async () => {
-      try {
-        const battle = await initializeTodaysBattle();
-        setCurrentBattle(battle);
+  const refreshData = async () => {
+    try {
+      const battle = await initializeTodaysBattle();
+      setCurrentBattle(battle);
 
-        const participants = await getTodaysParticipants();
-        setTodaysParticipants(participants);
-        setTodaysLeaderboard(participants);
+      const participants = await getTodaysParticipants();
+      // Convert DailyParticipant[] to TodaysParticipant[] format
+      const todaysParticipantsFormatted: TodaysParticipant[] = participants.map((p) => ({
+        id: p.id,
+        dot_name: p.dot_name,
+        user_id: p.user_id,
+        eliminations: p.eliminations,
+        placement: p.placement,
+        display_name: p.dot_name, // Use dot_name as display_name for now
+        is_registered: p.user_id !== null,
+        created_at: p.created_at,
+      }));
 
-        if (battle) {
-          if (battle.status === "completed") {
-            setRegistrationStatus("completed");
-            setCanRegisterToday(false);
-          } else if (battle.current_participants >= battle.max_participants) {
-            setRegistrationStatus(battle.status);
-            setCanRegisterToday(false);
-          } else {
-            setRegistrationStatus(battle.status);
-            setCanRegisterToday(true);
-          }
+      setTodaysParticipants(todaysParticipantsFormatted);
+      setTodaysLeaderboard(todaysParticipantsFormatted);
+
+      if (battle) {
+        const currentParticipants = battle.current_participants ?? 0;
+        const maxParticipants = battle.max_participants ?? 100;
+
+        if (battle.status === "completed") {
+          setRegistrationStatus("completed");
+          setCanRegisterToday(false);
+        } else if (currentParticipants >= maxParticipants) {
+          setRegistrationStatus(battle.status);
+          setCanRegisterToday(false);
+        } else {
+          setRegistrationStatus(battle.status);
+          setCanRegisterToday(battle.status === "registration");
         }
-
-        const allTime = await getRegisteredLeaderboard();
-        setAllTimeLeaderboard(allTime);
-      } catch (error) {
-        console.error("Failed to initialize today's state:", error);
       }
-    };
 
-    initializeToday();
-    const interval = setInterval(initializeToday, 30000);
+      const allTime = await getRegisteredLeaderboard();
+      setAllTimeLeaderboard(allTime);
+    } catch (error) {
+      console.error("Failed to refresh data:", error);
+    }
+  };
+
+  useEffect(() => {
+    refreshData();
+    // Refresh data every 30 seconds to stay in sync
+    const interval = setInterval(refreshData, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -226,30 +275,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   // Register a new dot for today's battle
-  const registerDotForBattle = async (
-    dotName: string,
-    deviceId: string
-  ): Promise<{ success: boolean; message: string }> => {
+  const registerDotForBattle = async (dotName: string, deviceId: string): Promise<BattleRegistration> => {
     try {
       const result = await registerForTodaysBattle(dotName, deviceId, user?.id);
 
       if (result.success) {
-        const participants = await getTodaysParticipants();
-        setTodaysParticipants(participants);
-        setTodaysLeaderboard(participants);
-
-        if (result.participant_count !== undefined) {
-          setCurrentBattle((prevBattle: any) =>
-            prevBattle
-              ? {
-                  ...prevBattle,
-                  current_participants: result.participant_count,
-                }
-              : null
-          );
-        }
-
-        setCanRegisterToday(false);
+        // Refresh data to get updated participant list
+        await refreshData();
       }
 
       return result;
@@ -259,40 +291,47 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Start today's battle simulation
+  // Start today's battle simulation - synchronized across all users
   const startTodaysBattle = async (): Promise<void> => {
     if (!currentBattle || todaysParticipants.length < 2) {
+      console.log("Cannot start battle: insufficient participants");
       return;
     }
 
     try {
-      await updateBattleStatus("in_progress");
-      setIsSimulationRunning(true);
+      console.log("Starting synchronized battle...");
 
-      const simulationDots: Dot[] = todaysParticipants.map(
-        (participant, index) => ({
-          id: participant.id,
-          name: participant.dot_name,
-          x: Math.random() * 750 + 25,
-          y: Math.random() * 550 + 25,
-          size: 8 + Math.random() * 4,
-          color: `hsl(${(index * 137.5) % 360}, 70%, 60%)`,
-          speed: 1 + Math.random() * 2,
-          eliminations: 0,
-          power:
-            Math.random() > 0.7
-              ? {
-                  type: ["speed", "shield", "teleport", "grow"][
-                    Math.floor(Math.random() * 4)
-                  ] as "speed" | "shield" | "teleport" | "grow",
-                  duration: 5000 + Math.random() * 10000,
-                  active: false,
-                  cooldown: 15000 + Math.random() * 15000,
-                  lastUsed: 0,
-                }
-              : null,
-        })
-      );
+      // Use the battle manager to start the battle (this syncs across all users)
+      const started = await battleManager.startBattle();
+      if (!started) {
+        console.error("Failed to start battle");
+        return;
+      }
+
+      setIsSimulationRunning(true);
+      setRegistrationStatus("in_progress");
+
+      // Create simulation dots from participants
+      const simulationDots: Dot[] = todaysParticipants.map((participant, index) => ({
+        id: participant.id || `dot-${index}`,
+        name: participant.dot_name || `Dot_${index}`,
+        x: Math.random() * 750 + 25,
+        y: Math.random() * 550 + 25,
+        size: 8 + Math.random() * 4,
+        color: `hsl(${(index * 137.5) % 360}, 70%, 60%)`,
+        speed: 1 + Math.random() * 2,
+        eliminations: 0,
+        power:
+          Math.random() > 0.7
+            ? {
+                type: ["speed", "shield", "teleport", "grow"][Math.floor(Math.random() * 4)] as "speed" | "shield" | "teleport" | "grow",
+                duration: 5000 + Math.random() * 10000,
+                active: false,
+                cooldown: 15000 + Math.random() * 15000,
+                lastUsed: 0,
+              }
+            : null,
+      }));
 
       const initialState: SimulationState = {
         dots: simulationDots,
@@ -307,26 +346,31 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
 
       const startTime = Date.now();
 
+      // Generate simulation with synchronized updates
       generateSimulation(
         initialState,
-        (state: SimulationState) => {
+        async (state: SimulationState) => {
           setSimulationState(state);
+          // Periodically sync simulation state to database
+          if (Math.random() < 0.1) {
+            // 10% chance to sync each update
+            await battleManager.updateSimulationData(state);
+          }
         },
         async (winner: Dot) => {
           const endTime = Date.now();
           const durationSeconds = Math.floor((endTime - startTime) / 1000);
 
-          await completeTodaysBattle(winner.name, initialState, durationSeconds);
+          console.log("Battle completed, winner:", winner.name);
+
+          // Complete the battle (this syncs across all users)
+          await battleManager.completeBattle(winner, simulationState, durationSeconds);
 
           setIsSimulationRunning(false);
           setRegistrationStatus("completed");
 
-          const finalParticipants = await getTodaysParticipants();
-          setTodaysParticipants(finalParticipants);
-          setTodaysLeaderboard(finalParticipants);
-
-          const allTime = await getRegisteredLeaderboard();
-          setAllTimeLeaderboard(allTime);
+          // Refresh data to get updated results
+          await refreshData();
         }
       );
     } catch (error) {
@@ -353,7 +397,5 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
     timeUntilBattle,
   };
 
-  return (
-    <GameContext.Provider value={contextValue}>{children}</GameContext.Provider>
-  );
+  return <GameContext.Provider value={contextValue}>{children}</GameContext.Provider>;
 };
