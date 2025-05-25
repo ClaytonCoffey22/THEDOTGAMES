@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import type { BattleRegistration } from "../types";
+import { clearDeviceFingerprint } from "./deviceFingerprint";
 
 export async function initializeTodaysBattle() {
   try {
@@ -48,6 +49,8 @@ export const registerForTodaysBattle = async (
   userId?: string
 ): Promise<BattleRegistration> => {
   try {
+    console.log('Attempting registration with:', { dotName, deviceId, userId });
+
     const { data: canRegister, error: checkError } = await supabase.rpc(
       "can_register_today",
       { 
@@ -58,16 +61,20 @@ export const registerForTodaysBattle = async (
 
     if (checkError) {
       console.error("Error checking registration eligibility:", checkError);
+      // Clear device fingerprint on error to allow retry
+      clearDeviceFingerprint();
       return {
         success: false,
-        message: "Unable to verify registration eligibility",
+        message: "Registration system is temporarily unavailable. Please try again in a few minutes.",
       };
     }
+
+    console.log('Registration eligibility check result:', canRegister);
 
     if (!canRegister) {
       return {
         success: false,
-        message: "This device has already registered for today's battle",
+        message: "This device has already registered for today's battle. Please try again tomorrow!",
       };
     }
 
@@ -82,13 +89,16 @@ export const registerForTodaysBattle = async (
 
     if (registerError) {
       console.error("Error registering for battle:", registerError);
-      return { success: false, message: "Registration failed" };
+      return { 
+        success: false, 
+        message: "Unable to complete registration. Please try again or contact support if the problem persists." 
+      };
     }
 
     if (!registrationSuccess) {
       return {
         success: false,
-        message: "Registration failed - possibly full or already registered",
+        message: "Registration failed. The battle might be full or registration is closed.",
       };
     }
 
@@ -98,6 +108,8 @@ export const registerForTodaysBattle = async (
       .eq("battle_date", new Date().toISOString().split("T")[0])
       .single();
 
+    console.log('Registration completed successfully:', battleInfo);
+
     return {
       success: true,
       message: "Successfully registered for today's battle!",
@@ -106,7 +118,10 @@ export const registerForTodaysBattle = async (
     };
   } catch (error) {
     console.error("Failed to register for battle:", error);
-    return { success: false, message: "An unexpected error occurred" };
+    return { 
+      success: false, 
+      message: "An unexpected error occurred. Please try again later or contact support." 
+    };
   }
 };
 
