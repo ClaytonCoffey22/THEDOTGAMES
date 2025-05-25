@@ -7,11 +7,16 @@ export async function initializeTodaysBattle() {
     const today = new Date().toISOString().split('T')[0];
     
     // Check if a battle already exists for today
-    const { data: existingBattle } = await supabase
+    const { data: existingBattle, error: fetchError } = await supabase
       .from('daily_battles')
       .select('*')
       .eq('battle_date', today)
-      .single();
+      .maybeSingle();
+
+    if (fetchError) {
+      console.error('Failed to fetch battle:', fetchError);
+      return null;
+    }
 
     if (existingBattle) {
       return existingBattle;
@@ -23,7 +28,7 @@ export async function initializeTodaysBattle() {
       .insert([
         {
           battle_date: today,
-          status: 'open',
+          status: 'registration',
           current_participants: 0,
           max_participants: 100
         }
@@ -168,7 +173,7 @@ export const completeTodaysBattle = async (
   }
 };
 
-export const updateBattleStatus = async (status: 'open' | 'in_progress' | 'completed') => {
+export const updateBattleStatus = async (status: 'registration' | 'in_progress' | 'completed') => {
   try {
     const { error } = await supabase
       .from('daily_battles')

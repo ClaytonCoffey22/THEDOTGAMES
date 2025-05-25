@@ -22,7 +22,7 @@ interface GameContextType {
   currentBattle: any | null;
   todaysParticipants: any[];
   canRegisterToday: boolean;
-  registrationStatus: "open" | "full" | "closed";
+  registrationStatus: "registration" | "in_progress" | "completed";
 
   // Simulation state
   simulationState: SimulationState;
@@ -74,8 +74,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
   const [todaysParticipants, setTodaysParticipants] = useState<any[]>([]);
   const [canRegisterToday, setCanRegisterToday] = useState(true);
   const [registrationStatus, setRegistrationStatus] = useState<
-    "open" | "full" | "closed"
-  >("open");
+    "registration" | "in_progress" | "completed"
+  >("registration");
 
   // Simulation state
   const [simulationState, setSimulationState] = useState<SimulationState>(
@@ -171,13 +171,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
 
         if (battle) {
           if (battle.status === "completed") {
-            setRegistrationStatus("closed");
+            setRegistrationStatus("completed");
             setCanRegisterToday(false);
           } else if (battle.current_participants >= battle.max_participants) {
-            setRegistrationStatus("full");
+            setRegistrationStatus(battle.status);
             setCanRegisterToday(false);
           } else {
-            setRegistrationStatus("open");
+            setRegistrationStatus(battle.status);
             setCanRegisterToday(true);
           }
         }
@@ -319,7 +319,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
           await completeTodaysBattle(winner.name, initialState, durationSeconds);
 
           setIsSimulationRunning(false);
-          setRegistrationStatus("closed");
+          setRegistrationStatus("completed");
 
           const finalParticipants = await getTodaysParticipants();
           setTodaysParticipants(finalParticipants);
