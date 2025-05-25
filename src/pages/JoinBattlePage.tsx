@@ -16,19 +16,17 @@ const JoinBattlePage: React.FC = () => {
 
   const { registerDotForBattle, registrationStatus, nextBattleTime } = useGame();
   const navigate = useNavigate();
-  const isRegistrationOpen = registrationStatus === "open";
+  const isRegistrationOpen = registrationStatus === "registration";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!isRegistrationOpen) {
       setFormStatus("error");
-      if (registrationStatus === "full") {
-        setErrorMessage("The battle is full. Please try again tomorrow!");
-      } else if (registrationStatus === "closed") {
-        setErrorMessage(
-          "Registration is currently closed during an active battle."
-        );
+      if (registrationStatus === "in_progress") {
+        setErrorMessage("Registration is currently closed during an active battle.");
+      } else if (registrationStatus === "completed") {
+        setErrorMessage("Today's battle has ended. Please try again tomorrow!");
       } else {
         setErrorMessage("Registration is not currently available.");
       }
@@ -106,12 +104,12 @@ const JoinBattlePage: React.FC = () => {
                     isRegistrationOpen ? "text-green-400" : "text-red-400"
                   }
                 >
-                  {registrationStatus === "open" &&
+                  {registrationStatus === "registration" &&
                     "Registration is open for the next battle!"}
-                  {registrationStatus === "full" &&
-                    "Tonight's battle is full! Registration opens tomorrow."}
-                  {registrationStatus === "closed" &&
-                    "Registration is currently closed during an active battle."}
+                  {registrationStatus === "in_progress" &&
+                    "A battle is currently in progress. Registration will open after it ends."}
+                  {registrationStatus === "completed" &&
+                    "Today's battle has ended. Registration opens tomorrow."}
                 </span>
               </div>
               {nextBattleTime && (
@@ -198,7 +196,7 @@ const JoinBattlePage: React.FC = () => {
             )}
           </div>
 
-          {/* How it works section - unchanged as it's still accurate */}
+          {/* How it works section */}
           <div className="mt-10 text-center">
             <h3 className="text-xl font-semibold text-white mb-4">
               How It Works
