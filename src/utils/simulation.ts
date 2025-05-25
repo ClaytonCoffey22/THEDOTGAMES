@@ -2,31 +2,29 @@ import { Dot, SimulationState, EliminationEvent } from '../types';
 
 const ARENA_WIDTH = 800;
 const ARENA_HEIGHT = 600;
-const UPDATE_INTERVAL = 16;
+const UPDATE_INTERVAL = 1000 / 60; // 60 FPS
 const ELIMINATION_DISTANCE = 10;
 const GROWTH_FACTOR = 1.2;
-const MOMENTUM_FACTOR = 0.7;
-const MAX_SPEED = 10;
-const MIN_SPEED = 3;
-const POWER_ACTIVATION_CHANCE = 0.05; // Increased chance for more frequent power-ups
-const POWER_DURATION_BASE = 4000; // 4 seconds base duration
-const POWER_COOLDOWN_BASE = 6000; // 6 seconds cooldown
-const MATCH_TIME_PER_ROUND = 3000; // 3 seconds per round average
+const MOMENTUM_FACTOR = 0.95; // Increased for smoother movement
+const MAX_SPEED = 5; // Reduced for smoother movement
+const MIN_SPEED = 2;
+const POWER_ACTIVATION_CHANCE = 0.05;
+const POWER_DURATION_BASE = 4000;
+const POWER_COOLDOWN_BASE = 6000;
+const MATCH_TIME_PER_ROUND = 3000;
 const TELEPORT_CHANCE = 0.08;
 
 // Match duration based on participant count (in milliseconds)
 const getMatchDuration = (participantCount: number): number => {
-  // Calculate number of rounds needed for tournament
   const rounds = Math.ceil(Math.log2(participantCount));
-  // Each round takes MATCH_TIME_PER_ROUND milliseconds
   return rounds * MATCH_TIME_PER_ROUND;
 };
 
 // Calculate attraction force as time progresses
 const getAttractionForce = (elapsedTime: number, totalDuration: number): number => {
   const timeProgress = elapsedTime / totalDuration;
-  // Increased attraction force for faster matches
-  return Math.min(8, 1 + Math.pow(timeProgress, 2) * 10);
+  // Smoother attraction force curve
+  return Math.min(4, 0.5 + Math.pow(timeProgress, 1.5) * 5);
 };
 
 interface DotVelocity {
@@ -36,7 +34,6 @@ interface DotVelocity {
 
 const dotVelocities = new Map<string, DotVelocity>();
 
-// Tournament bracket management
 interface BracketMatch {
   dot1: Dot;
   dot2: Dot;
@@ -54,10 +51,8 @@ class TournamentManager {
   }
 
   private initializeBracket(dots: Dot[]) {
-    // Shuffle dots for random matchups
     const shuffledDots = [...dots].sort(() => Math.random() - 0.5);
     
-    // Create initial matches
     for (let i = 0; i < shuffledDots.length; i += 2) {
       if (i + 1 < shuffledDots.length) {
         this.matches.push({
@@ -66,7 +61,6 @@ class TournamentManager {
           completed: false
         });
       } else {
-        // Bye round if odd number of dots
         this.matches.push({
           dot1: shuffledDots[i],
           dot2: null as any,
@@ -80,12 +74,10 @@ class TournamentManager {
   public updateMatches(state: SimulationState): void {
     const currentTime = Date.now();
     
-    // Start new round if needed
     if (this.roundStartTime === 0) {
       this.roundStartTime = currentTime;
     }
 
-    // Check if current round should end
     if (currentTime - this.roundStartTime >= MATCH_TIME_PER_ROUND) {
       this.completeRound(state);
       this.roundStartTime = currentTime;
@@ -96,18 +88,15 @@ class TournamentManager {
     const incompleteMatches = this.matches.filter(m => !m.completed);
     const nextRoundMatches: BracketMatch[] = [];
 
-    // Complete all matches in current round
     for (const match of incompleteMatches) {
       if (!match.winner) {
-        // Determine winner based on size and random chance
-        const randomFactor = Math.random() * 0.2; // 20% random influence
+        const randomFactor = Math.random() * 0.2;
         const dot1Score = match.dot1.size * (1 + randomFactor);
         const dot2Score = match.dot2.size * (1 + randomFactor);
         
         match.winner = dot1Score > dot2Score ? match.dot1 : match.dot2;
         match.completed = true;
 
-        // Record elimination
         state.eliminationLog.push({
           timestamp: Date.now(),
           eliminatorId: match.winner.id,
@@ -121,7 +110,6 @@ class TournamentManager {
       }
     }
 
-    // Create next round matches
     for (let i = 0; i < this.matches.length; i += 2) {
       if (i + 1 < this.matches.length) {
         nextRoundMatches.push({
@@ -130,7 +118,6 @@ class TournamentManager {
           completed: false
         });
       } else if (this.matches[i].winner) {
-        // Single winner advances
         nextRoundMatches.push({
           dot1: this.matches[i].winner,
           dot2: null as any,
@@ -143,7 +130,6 @@ class TournamentManager {
     this.matches = nextRoundMatches;
     this.currentRound++;
 
-    // Check if tournament is complete
     if (this.matches.length === 1 && this.matches[0].completed) {
       state.winner = this.matches[0].winner!;
       state.inProgress = false;
@@ -157,19 +143,21 @@ export const generateSimulation = (
   onComplete: (winner: Dot) => void
 ) => {
   let state = { ...initialState };
+  let lastFrameTime = performance.now();
   let animationFrameId: number;
   const startTime = Date.now();
   const matchDuration = getMatchDuration(state.dots.length);
   const tournament = new TournamentManager(state.dots);
   
-  // Initialize velocities and scale parameters
+  // Initialize velocities with smoother initial movement
   state.dots.forEach(dot => {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = MIN_SPEED + Math.random() * (MAX_SPEED - MIN_SPEED);
     dotVelocities.set(dot.id, {
-      vx: (Math.random() - 0.5) * MAX_SPEED,
-      vy: (Math.random() - 0.5) * MAX_SPEED
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed
     });
 
-    // Randomly assign powers to 30% of dots
     if (Math.random() < 0.3) {
       dot.power = {
         type: ["speed", "shield", "teleport", "grow"][Math.floor(Math.random() * 4)] as "speed" | "shield" | "teleport" | "grow",
@@ -181,16 +169,15 @@ export const generateSimulation = (
     }
   });
 
-  const update = () => {
-    const currentTime = Date.now();
-    const elapsedTime = currentTime - startTime;
-    const deltaTime = state.lastUpdateTime ? (currentTime - state.lastUpdateTime) / 1000 : 0.016;
-    state.lastUpdateTime = currentTime;
+  const update = (currentTime: number) => {
+    const deltaTime = (currentTime - lastFrameTime) / 1000;
+    lastFrameTime = currentTime;
 
-    // Update tournament state
+    const elapsedTime = Date.now() - startTime;
+    state.lastUpdateTime = Date.now();
+
     tournament.updateMatches(state);
 
-    // Force end game if time is up
     if (elapsedTime >= matchDuration || state.dots.length <= 1) {
       if (!state.winner && state.dots.length > 0) {
         state.winner = state.dots[0];
@@ -205,12 +192,10 @@ export const generateSimulation = (
 
     const attractionForce = getAttractionForce(elapsedTime, matchDuration);
     
-    // Update dot positions and handle interactions
     state.dots.forEach(dot1 => {
-      // Random chance to activate power-ups
       if (dot1.power && !dot1.power.active && 
           currentTime - dot1.power.lastUsed >= dot1.power.cooldown &&
-          Math.random() < POWER_ACTIVATION_CHANCE) {
+          Math.random() < POWER_ACTIVATION_CHANCE * deltaTime) {
         dot1.power.active = true;
         dot1.power.lastUsed = currentTime;
         setTimeout(() => {
@@ -223,7 +208,6 @@ export const generateSimulation = (
       const velocity = dotVelocities.get(dot1.id);
       if (!velocity) return;
 
-      // Find nearest smaller dot to chase
       let nearestSmaller: { dot: Dot, distance: number } | null = null;
       state.dots.forEach(dot2 => {
         if (dot1 === dot2 || dot1.size <= dot2.size) return;
@@ -237,7 +221,6 @@ export const generateSimulation = (
         }
       });
 
-      // Apply attraction to smaller dots
       if (nearestSmaller) {
         const dx = nearestSmaller.dot.x - dot1.x;
         const dy = nearestSmaller.dot.y - dot1.y;
@@ -247,15 +230,14 @@ export const generateSimulation = (
         velocity.vy += (dy / distance) * dot1.speed * attractionForce * deltaTime;
       }
 
-      // Apply power effects
       if (dot1.power?.active) {
         switch (dot1.power.type) {
           case 'speed':
-            velocity.vx *= 2;
-            velocity.vy *= 2;
+            velocity.vx *= 1.5;
+            velocity.vy *= 1.5;
             break;
           case 'teleport':
-            if (Math.random() < TELEPORT_CHANCE) {
+            if (Math.random() < TELEPORT_CHANCE * deltaTime) {
               dot1.x = Math.random() * (ARENA_WIDTH - dot1.size * 2) + dot1.size;
               dot1.y = Math.random() * (ARENA_HEIGHT - dot1.size * 2) + dot1.size;
               velocity.vx = (Math.random() - 0.5) * MAX_SPEED;
@@ -263,34 +245,38 @@ export const generateSimulation = (
             }
             break;
           case 'grow':
-            dot1.size += 0.1;
+            dot1.size += 0.05 * deltaTime;
             break;
         }
       }
 
-      // Update position
-      dot1.x += velocity.vx * deltaTime;
-      dot1.y += velocity.vy * deltaTime;
+      // Apply momentum
+      velocity.vx *= MOMENTUM_FACTOR;
+      velocity.vy *= MOMENTUM_FACTOR;
 
-      // Bounce off walls
+      // Update position with delta time
+      dot1.x += velocity.vx * deltaTime * 60;
+      dot1.y += velocity.vy * deltaTime * 60;
+
+      // Bounce off walls with momentum preservation
       if (dot1.x <= dot1.size || dot1.x >= ARENA_WIDTH - dot1.size) {
-        velocity.vx *= -1;
+        velocity.vx *= -MOMENTUM_FACTOR;
         dot1.x = Math.max(dot1.size, Math.min(ARENA_WIDTH - dot1.size, dot1.x));
       }
       if (dot1.y <= dot1.size || dot1.y >= ARENA_HEIGHT - dot1.size) {
-        velocity.vy *= -1;
+        velocity.vy *= -MOMENTUM_FACTOR;
         dot1.y = Math.max(dot1.size, Math.min(ARENA_HEIGHT - dot1.size, dot1.y));
       }
 
-      // Normalize velocity
+      // Normalize velocity with smooth clamping
       const speed = Math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy);
       if (speed > MAX_SPEED) {
-        velocity.vx = (velocity.vx / speed) * MAX_SPEED;
-        velocity.vy = (velocity.vy / speed) * MAX_SPEED;
+        const scale = 1 - (1 - MAX_SPEED / speed) * 0.1;
+        velocity.vx *= scale;
+        velocity.vy *= scale;
       }
     });
 
-    // Check for eliminations
     const eliminationEvents = checkEliminations(state.dots);
     if (eliminationEvents.length > 0) {
       state.eliminationLog = [...state.eliminationLog, ...eliminationEvents];
