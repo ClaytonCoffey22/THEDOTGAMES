@@ -4,6 +4,7 @@
 import type { DailyParticipant, Dot } from "../types";
 import { SynchronizedBattleManager } from "./BattleSync";
 import { supabase } from "./supabase";
+import { SynchronizedBattleEngine } from "./synchronizedSimulation";
 
 interface ScheduledBattle {
   id: string;
@@ -160,9 +161,17 @@ export class BattleScheduler {
         return;
       }
 
-      if (!participants || participants.length < schedule.minimum_participants) {
-        console.log("Not enough participants to start battle");
-        return;
+      if (participants && participants.length >= schedule.minimum_participants) {
+        const today = new Date().toISOString().split("T")[0];
+
+        // Update battle status
+        await supabase.from("daily_battles").update({ status: "in_progress" }).eq("battle_date", today);
+
+        // Start synchronized battle
+        const battleEngine = new SynchronizedBattleEngine(today);
+        await battleEngine.startSynchronizedBattle(participants);
+
+        console.log(`Automatically started synchronized battle with ${participants.length} participants`);
       }
 
       // Start the battle

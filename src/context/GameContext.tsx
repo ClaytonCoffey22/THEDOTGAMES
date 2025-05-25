@@ -1,10 +1,16 @@
 import { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { BattleRegistration, DailyBattle, Dot, RegisteredLeaderboardEntry, SimulationState, TodaysParticipant } from "../types";
-import { getRegisteredLeaderboard, getTodaysParticipants, initializeTodaysBattle, registerForTodaysBattle } from "../utils/battleManager";
+import { BattleRegistration, DailyBattle, RegisteredLeaderboardEntry, SimulationState, TodaysParticipant } from "../types";
+import {
+  getRegisteredLeaderboard,
+  getTodaysParticipants,
+  initializeTodaysBattle,
+  registerForTodaysBattle,
+  updateBattleStatus,
+} from "../utils/battleManager";
 import { SynchronizedBattleManager } from "../utils/BattleSync";
-import { generateSimulation } from "../utils/simulation";
 import { supabase } from "../utils/supabase";
+import { SynchronizedBattleEngine } from "../utils/synchronizedSimulation";
 
 interface GameContextType {
   // Authentication state
@@ -293,89 +299,29 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Start today's battle simulation - synchronized across all users
   const startTodaysBattle = async (): Promise<void> => {
+    console.log("Admin starting battle...");
+
     if (!currentBattle || todaysParticipants.length < 2) {
       console.log("Cannot start battle: insufficient participants");
       return;
     }
 
     try {
-      console.log("Starting synchronized battle...");
+      const today = new Date().toISOString().split("T")[0];
 
-      // Use the battle manager to start the battle (this syncs across all users)
-      const started = await battleManager.startBattle();
-      if (!started) {
-        console.error("Failed to start battle");
-        return;
-      }
+      // Update battle status
+      await updateBattleStatus("in_progress");
 
-      setIsSimulationRunning(true);
+      // Get the raw DailyParticipant data for the battle engine
+      const participants = await getTodaysParticipants();
+
+      // Start synchronized battle
+      const battleEngine = new SynchronizedBattleEngine(today);
+      await battleEngine.startSynchronizedBattle(participants);
+
       setRegistrationStatus("in_progress");
-
-      // Create simulation dots from participants
-      const simulationDots: Dot[] = todaysParticipants.map((participant, index) => ({
-        id: participant.id || `dot-${index}`,
-        name: participant.dot_name || `Dot_${index}`,
-        x: Math.random() * 750 + 25,
-        y: Math.random() * 550 + 25,
-        size: 8 + Math.random() * 4,
-        color: `hsl(${(index * 137.5) % 360}, 70%, 60%)`,
-        speed: 1 + Math.random() * 2,
-        eliminations: 0,
-        power:
-          Math.random() > 0.7
-            ? {
-                type: ["speed", "shield", "teleport", "grow"][Math.floor(Math.random() * 4)] as "speed" | "shield" | "teleport" | "grow",
-                duration: 5000 + Math.random() * 10000,
-                active: false,
-                cooldown: 15000 + Math.random() * 15000,
-                lastUsed: 0,
-              }
-            : null,
-      }));
-
-      const initialState: SimulationState = {
-        dots: simulationDots,
-        eliminationLog: [],
-        winner: null,
-        inProgress: true,
-        lastUpdateTime: Date.now(),
-        simulationDate: new Date().toISOString(),
-      };
-
-      setSimulationState(initialState);
-
-      const startTime = Date.now();
-
-      // Generate simulation with synchronized updates
-      generateSimulation(
-        initialState,
-        async (state: SimulationState) => {
-          setSimulationState(state);
-          // Periodically sync simulation state to database
-          if (Math.random() < 0.1) {
-            // 10% chance to sync each update
-            await battleManager.updateSimulationData(state);
-          }
-        },
-        async (winner: Dot) => {
-          const endTime = Date.now();
-          const durationSeconds = Math.floor((endTime - startTime) / 1000);
-
-          console.log("Battle completed, winner:", winner.name);
-
-          // Complete the battle (this syncs across all users)
-          await battleManager.completeBattle(winner, simulationState, durationSeconds);
-
-          setIsSimulationRunning(false);
-          setRegistrationStatus("completed");
-
-          // Refresh data to get updated results
-          await refreshData();
-        }
-      );
     } catch (error) {
       console.error("Failed to start battle:", error);
-      setIsSimulationRunning(false);
     }
   };
 

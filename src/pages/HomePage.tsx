@@ -2,9 +2,9 @@ import { Play, Share2 } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import AdminBattleSettings, { BattleSettings } from "../components/game/AdminBattleSettings";
-import BattleArena from "../components/game/BattleArena";
 import KillFeed from "../components/game/KillFeed";
 import PowersLegend from "../components/game/PowersLegend";
+import SynchronizedViewer from "../components/game/synchronizedViewer";
 import Button from "../components/ui/Button";
 import { useGame } from "../context/GameContext";
 
@@ -148,7 +148,7 @@ const HomePage: React.FC = () => {
                 </div>
               </div>
 
-              <BattleArena width={arenaSize.width} height={arenaSize.height} />
+              <SynchronizedViewer battleDate={new Date().toISOString().split("T")[0]} width={arenaSize.width} height={arenaSize.height} />
 
               <div className="mt-4 text-center">
                 <p className="text-gray-400 text-sm">{getBattleStatusMessage()}</p>

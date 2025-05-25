@@ -1,6 +1,7 @@
 import { Clock, Eye, EyeOff, Lock, Play, Save, Settings, Target, Zap } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { supabase } from "../../utils/supabase";
+import { SynchronizedBattleEngine } from "../../utils/synchronizedSimulation";
 
 export interface BattleSettings {
   intensity: "casual" | "normal" | "intense" | "chaos";
@@ -18,7 +19,7 @@ interface AdminBattleSettingsProps {
   onStartBattle?: () => void; // Add this line
 }
 
-const AdminBattleSettings: React.FC<AdminBattleSettingsProps> = ({ onSettingsChange, onStartBattle }) => {
+const AdminBattleSettings: React.FC<AdminBattleSettingsProps> = ({ onSettingsChange }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
@@ -57,7 +58,7 @@ const AdminBattleSettings: React.FC<AdminBattleSettingsProps> = ({ onSettingsCha
   // Load current settings on component mount
   useEffect(() => {
     loadCurrentSettings();
-  }, []);
+  });
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,11 +90,25 @@ const AdminBattleSettings: React.FC<AdminBattleSettingsProps> = ({ onSettingsCha
   const handleStartNow = async () => {
     setIsStarting(true);
     try {
-      // Call the start battle function from context
-      if (window.confirm("Start battle now with current participants?")) {
-        // You'll need to access this from the parent component
-        // We'll pass it as a prop
-        onStartBattle?.();
+      if (window.confirm("Start synchronized battle now with current participants?")) {
+        const today = new Date().toISOString().split("T")[0];
+
+        // Get current participants
+        const { data: participants } = await supabase
+          .from("daily_participants")
+          .select("*")
+          .eq("battle_id", (await supabase.from("daily_battles").select("id").eq("battle_date", today).single()).data?.id);
+
+        if (participants && participants.length >= 2) {
+          // Update battle status to in_progress
+          await supabase.from("daily_battles").update({ status: "in_progress" }).eq("battle_date", today);
+
+          // Start synchronized battle
+          const battleEngine = new SynchronizedBattleEngine(today);
+          await battleEngine.startSynchronizedBattle(participants);
+        } else {
+          alert("Need at least 2 participants to start battle");
+        }
       }
     } catch (error) {
       console.error("Failed to start battle:", error);
