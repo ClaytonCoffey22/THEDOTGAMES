@@ -3,15 +3,15 @@ import { Dot, SimulationState, EliminationEvent } from '../types';
 const ARENA_WIDTH = 800;
 const ARENA_HEIGHT = 600;
 const UPDATE_INTERVAL = 16; // 60 FPS for smooth animation
-const ELIMINATION_DISTANCE = 8; // Increased from 5 to make eliminations more frequent
-const GROWTH_FACTOR = 1.0; // Doubled from 0.5 to make dots grow faster after eliminations
-const MOMENTUM_FACTOR = 0.75; // Reduced from 0.85 to make movement more dynamic
-const MAX_SPEED = 8; // Increased from 5 for faster movement
-const MIN_SPEED = 2; // Increased from 0.5 for more active dots
-const POWER_ACTIVATION_CHANCE = 0.02; // Doubled from 0.01 for more frequent power usage
-const POWER_DURATION_BASE = 3000; // 3 seconds base duration
-const POWER_COOLDOWN_BASE = 8000; // 8 seconds base cooldown
-const TELEPORT_CHANCE = 0.08; // Increased from 0.05 for more frequent teleports
+const ELIMINATION_DISTANCE = 8;
+const GROWTH_FACTOR = 1.0;
+const MOMENTUM_FACTOR = 0.75;
+const MAX_SPEED = 8;
+const MIN_SPEED = 2;
+const POWER_ACTIVATION_CHANCE = 0.02;
+const POWER_DURATION_BASE = 3000;
+const POWER_COOLDOWN_BASE = 8000;
+const TELEPORT_CHANCE = 0.08;
 
 // Duration settings based on participant count
 const getDurationForParticipants = (count: number): number => {
@@ -19,6 +19,13 @@ const getDurationForParticipants = (count: number): number => {
   if (count <= 10) return 75000; // 1:15 for 5-10 participants
   if (count <= 100) return 105000; // 1:45 for 11-100 participants
   return 120000; // 2:00 for 101-200 participants
+};
+
+// Force larger dots to chase smaller ones as time runs out
+const getForceMultiplier = (elapsedTime: number, totalDuration: number): number => {
+  const timeRemaining = totalDuration - elapsedTime;
+  // Increase force exponentially as time runs out
+  return 1 + Math.pow(1 - (timeRemaining / totalDuration), 2) * 4;
 };
 
 interface DotVelocity {
@@ -51,11 +58,9 @@ export const generateSimulation = (
       });
     }
     
-    // Scale dot size and speed based on participant count
     dot.size *= scaleFactor;
     dot.speed *= scaleFactor;
     
-    // Adjust power durations and cooldowns
     if (dot.power) {
       dot.power.duration = POWER_DURATION_BASE * scaleFactor;
       dot.power.cooldown = POWER_COOLDOWN_BASE / scaleFactor;
@@ -67,13 +72,63 @@ export const generateSimulation = (
     const deltaTime = state.lastUpdateTime ? (now - state.lastUpdateTime) / 1000 : 0.016;
     state.lastUpdateTime = now;
     
-    // Check if simulation time has expired
     const elapsedTime = now - simulationStartTime;
+    const forceMultiplier = getForceMultiplier(elapsedTime, simulationDuration);
+    
+    // Update dot movements with increased attraction to smaller dots
+    state.dots.forEach(dot1 => {
+      const velocity = dotVelocities.get(dot1.id);
+      if (!velocity) return;
+      
+      // Find the nearest smaller dot
+      let nearestSmaller: Dot | null = null;
+      let minDistance = Infinity;
+      
+      state.dots.forEach(dot2 => {
+        if (dot1 === dot2 || dot1.size <= dot2.size) return;
+        
+        const dx = dot2.x - dot1.x;
+        const dy = dot2.y - dot1.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestSmaller = dot2;
+        }
+      });
+      
+      // Apply attraction force towards smaller dot
+      if (nearestSmaller) {
+        const dx = nearestSmaller.x - dot1.x;
+        const dy = nearestSmaller.y - dot1.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        velocity.vx += (dx / distance) * dot1.speed * forceMultiplier * deltaTime;
+        velocity.vy += (dy / distance) * dot1.speed * forceMultiplier * deltaTime;
+      }
+    });
+    
+    // Check if simulation time has expired
     if (elapsedTime >= simulationDuration) {
       // Find the largest dot as the winner
       const winner = state.dots.reduce((prev, current) => 
         current.size > prev.size ? current : prev
       );
+      
+      // Force consume all remaining dots
+      const remainingDots = state.dots.filter(dot => dot !== winner);
+      remainingDots.forEach(dot => {
+        state.eliminationLog.push({
+          timestamp: now,
+          eliminatorId: winner.id,
+          eliminatorName: winner.name,
+          eliminatedId: dot.id,
+          eliminatedName: dot.name
+        });
+        winner.eliminations += 1;
+      });
+      
+      state.dots = [winner];
       state.winner = winner;
       state.inProgress = false;
       onUpdate({ ...state });
@@ -135,12 +190,11 @@ const updateDots = (dots: Dot[], deltaTime: number, scaleFactor: number) => {
     
     let moveSpeed = dot.speed;
     if (dot.power?.active && dot.power.type === 'speed') {
-      moveSpeed *= 4; // Increased speed boost from 3x to 4x
+      moveSpeed *= 4;
     }
     
     let velocity = dotVelocities.get(dot.id) || { vx: 0, vy: 0 };
     
-    // More dynamic movement with varying directions
     const angleChange = (Math.random() - 0.5) * Math.PI * deltaTime;
     const currentAngle = Math.atan2(velocity.vy, velocity.vx);
     const newAngle = currentAngle + angleChange;
@@ -170,22 +224,21 @@ const updateDots = (dots: Dot[], deltaTime: number, scaleFactor: number) => {
       dot.y += velocity.vy * deltaTime * 60;
     }
     
-    // Improved wall bouncing with speed preservation
     if (dot.x <= dot.size || dot.x >= ARENA_WIDTH - dot.size) {
-      velocity.vx *= -0.9; // Less speed loss on bounce
+      velocity.vx *= -0.9;
       dot.x = Math.max(dot.size, Math.min(ARENA_WIDTH - dot.size, dot.x));
     }
     if (dot.y <= dot.size || dot.y >= ARENA_HEIGHT - dot.size) {
-      velocity.vy *= -0.9; // Less speed loss on bounce
+      velocity.vy *= -0.9;
       dot.y = Math.max(dot.size, Math.min(ARENA_HEIGHT - dot.size, dot.y));
     }
     
     dotVelocities.set(dot.id, velocity);
     
     if (dot.power?.active && dot.power.type === 'grow') {
-      const maxSize = 30 * scaleFactor; // Scale maximum size with participant count
+      const maxSize = 30 * scaleFactor;
       if (dot.size < maxSize) {
-        dot.size += 0.1 * scaleFactor; // Faster growth rate
+        dot.size += 0.1 * scaleFactor;
       }
     }
   });
@@ -208,9 +261,8 @@ const checkEliminations = (dots: Dot[]): EliminationEvent[] => {
         let eliminated: Dot;
         let eliminator: Dot;
         
-        // Size difference threshold for elimination
         const sizeDifference = Math.abs(dot1.size - dot2.size);
-        const minSizeDifference = 2; // Minimum size difference required for elimination
+        const minSizeDifference = 2;
         
         if (dot1.size > dot2.size && sizeDifference >= minSizeDifference) {
           eliminator = dot1;
@@ -219,7 +271,7 @@ const checkEliminations = (dots: Dot[]): EliminationEvent[] => {
           eliminator = dot2;
           eliminated = dot1;
         } else {
-          continue; // Skip elimination if size difference is too small
+          continue;
         }
         
         if (eliminated.power?.active && eliminated.power.type === 'shield') {
